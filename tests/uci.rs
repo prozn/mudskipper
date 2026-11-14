@@ -50,7 +50,7 @@ fn crlf_line_endings_work_like_lf() {
 fn unknown_command_gets_info_string_and_engine_keeps_running() {
     let mut engine = Engine::start();
     engine.send("frobnicate the board");
-    let (reply, _) = engine.read_until("info string", |l| l.starts_with("info string"));
+    let reply = engine.expect_info_string();
     assert!(
         reply.contains("frobnicate"),
         "reply should name the command: {reply:?}"
@@ -67,7 +67,7 @@ fn unknown_command_gets_info_string_and_engine_keeps_running() {
 fn invalid_utf8_line_gets_info_string_and_engine_keeps_running() {
     let mut engine = Engine::start();
     engine.send_bytes(b"position \xff\xfe startpos\n");
-    engine.read_until("info string", |l| l.starts_with("info string"));
+    engine.expect_info_string();
     assert!(engine.is_running(), "engine exited after a malformed line");
     engine.send("isready");
     engine.expect_line("readyok");

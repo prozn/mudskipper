@@ -9,6 +9,14 @@ use std::time::{Duration, Instant};
 /// How long to wait for an expected reply before failing the test.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// A line the engine printed, with the lines it printed before it since the last read.
+pub struct Reply {
+    /// The line that was waited for.
+    pub line: String,
+    /// Lines printed earlier that did not match.
+    pub before: Vec<String>,
+}
+
 /// A running engine process with line-buffered access to its output.
 pub struct Engine {
     child: Child,
@@ -68,11 +76,7 @@ impl Engine {
     /// Reads lines until one satisfies `pred`, returning it and the lines before it.
     ///
     /// Panics with the transcript if no such line arrives in time.
-    pub fn read_until(
-        &mut self,
-        what: &str,
-        mut pred: impl FnMut(&str) -> bool,
-    ) -> (String, Vec<String>) {
+    pub fn read_line_matching(&mut self, what: &str, mut pred: impl FnMut(&str) -> bool) -> Reply {
         let deadline = Instant::now() + REPLY_TIMEOUT;
         let mut before = Vec::new();
         loop {
@@ -81,7 +85,7 @@ impl Engine {
                 Ok(line) => {
                     self.transcript.push(line.clone());
                     if pred(&line) {
-                        return (line, before);
+                        return Reply { line, before };
                     }
                     before.push(line);
                 }
@@ -103,8 +107,14 @@ impl Engine {
 
     /// Reads lines until one equals `expected` exactly, returning the lines before it.
     pub fn expect_line(&mut self, expected: &str) -> Vec<String> {
-        self.read_until(&format!("{expected:?}"), |line| line == expected)
-            .1
+        self.read_line_matching(&format!("{expected:?}"), |line| line == expected)
+            .before
+    }
+
+    /// Reads lines until an `info string` line arrives, returning that line.
+    pub fn expect_info_string(&mut self) -> String {
+        self.read_line_matching("an info string", |line| line.starts_with("info string"))
+            .line
     }
 
     /// Waits for the process to exit on its own.
