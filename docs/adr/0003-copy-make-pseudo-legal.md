@@ -1,0 +1,3 @@
+# Copy-make board with pseudo-legal move generation
+
+The search applies moves by copying the board (`make(mv) -> Board`) rather than with make/unmake and an undo stack. The board is small enough that copying it once per ply is cheap, and there is no unmake code to get wrong. A separate stack of Zobrist keys is kept for spotting repetitions. Move generation is pseudo-legal, with an `is_legal` filter and an `is_pseudo_legal` check for moves taken from the transposition table and killer slots. That design suits a staged move picker that never generates quiet moves it doesn't need. Fully legal generation using pin and check masks was rejected for that reason. Perft filters to legal moves.
