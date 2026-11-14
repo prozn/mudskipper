@@ -1,0 +1,3 @@
+# No runtime dependencies; `unsafe` only with a documented reason
+
+The engine has no runtime dependencies. Dev-dependencies such as criterion and proptest are allowed. This keeps builds fast and reproducible and avoids depending on code we haven't read in the hot path. Error types are therefore written by hand, without `thiserror`. `unsafe` is denied crate-wide. It is allowed only in small modules with a stated reason (NNUE SIMD via `std::arch`, and possibly unchecked table lookups that measurably help). Each such module carries `#![deny(unsafe_op_in_unsafe_fn)]`, and every block carries a `// SAFETY:` comment. Any new runtime dependency requires amending this ADR.

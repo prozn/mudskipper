@@ -1,0 +1,3 @@
+# Single lib+bin crate, not a Cargo workspace
+
+Mudskipper is one package with `src/lib.rs` and `src/main.rs`, organised as module trees (`chess/`, `eval/`, `search/`, `uci/`, `tools/`). A workspace with a separate movegen crate was considered, but every strong, well-maintained Rust engine we surveyed (Reckless, Viridithas, Black Marlin, akimbo) is a single crate. A workspace adds overhead without a payoff at this stage. The lib target still lets `tests/` and `benches/` reach the core. The rule that `chess` never depends on `search`, `eval` or `uci` is enforced by review. Splitting out a crate later, for example for a standalone tool, is cheap.
