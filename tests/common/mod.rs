@@ -68,7 +68,11 @@ impl Engine {
     /// Reads lines until one satisfies `pred`, returning it and the lines before it.
     ///
     /// Panics with the transcript if no such line arrives in time.
-    pub fn read_until(&mut self, what: &str, pred: impl Fn(&str) -> bool) -> (String, Vec<String>) {
+    pub fn read_until(
+        &mut self,
+        what: &str,
+        mut pred: impl FnMut(&str) -> bool,
+    ) -> (String, Vec<String>) {
         let deadline = Instant::now() + REPLY_TIMEOUT;
         let mut before = Vec::new();
         loop {
@@ -133,10 +137,11 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         // Close stdin first so a well-behaved engine sees EOF, then make sure it is gone.
+        // Best effort only: a panic here would abort a test that is already failing.
         drop(self.stdin.take());
-        if self.is_running() {
+        if let Ok(None) = self.child.try_wait() {
             let _ = self.child.kill();
+            let _ = self.child.wait();
         }
-        let _ = self.child.wait();
     }
 }

@@ -28,8 +28,7 @@ pub fn run(mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
             output.flush()?;
             continue;
         };
-        let mut tokens = line.split_whitespace();
-        match tokens.next() {
+        match line.split_whitespace().next() {
             None => {}
             Some("uci") => {
                 writeln!(output, "id name {NAME}")?;

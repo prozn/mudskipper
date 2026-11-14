@@ -42,7 +42,8 @@ fn crlf_line_endings_work_like_lf() {
     engine.send_raw("isready\r\n");
     engine.expect_line("readyok");
     engine.send_raw("quit\r\n");
-    assert!(engine.wait_exit().success());
+    let status = engine.wait_exit();
+    assert!(status.success(), "engine exited with {status}");
 }
 
 #[test]
