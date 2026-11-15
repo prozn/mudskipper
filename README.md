@@ -34,6 +34,15 @@ help with debugging:
   point of view.
 - `go perft <depth>` prints the **Perft** count below each legal move, then the total.
 
+Run with `bench` as its argument, it runs **Bench** instead of the UCI loop: it searches
+a fixed set of 50 positions and prints the total node count, the **Bench signature**, as
+its final line, `<nodes> nodes <nps> nps`. `bench <depth>` searches to a depth other than
+the default of 5.
+
+```sh
+./target/release/mudskipper bench
+```
+
 ## Building
 
 Mudskipper needs Rust 1.99. The version is pinned in `rust-toolchain.toml`, so `rustup`
@@ -81,7 +90,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-CI runs the same three checks on Linux and Windows.
+CI runs the same three checks on Linux and Windows. It also checks that `bench` reports
+the node count given by the `Bench:` line of the head commit message.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, SPRT and commit message workflow.
 
 The deep **Perft** suite is too slow for CI. Run it by hand in release mode:
 
