@@ -29,6 +29,9 @@ pub struct Clock {
 }
 
 /// How long a search may run.
+///
+/// The search always completes its first iteration, however little time it is given, so
+/// that it returns a searched move rather than an arbitrary one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TimeLimit {
     /// Once this much time has passed, the search starts no new iteration.

@@ -23,11 +23,8 @@ pub(super) struct SearchRequest {
     pub limits: Limits,
     /// The time to search for, from `movetime`.
     pub movetime: Option<Duration>,
-    /// The time each side has left, from `wtime` and `btime`, indexed by colour.
-    pub time: [Option<Duration>; 2],
-    /// The time each side gains after each move, from `winc` and `binc`, indexed by
-    /// colour.
-    pub increment: [Option<Duration>; 2],
+    /// Each side's clock, from `wtime`, `btime`, `winc` and `binc`, indexed by colour.
+    pub clocks: [SideClock; 2],
     /// The moves left until the next time control, from `movestogo`.
     pub moves_to_go: Option<u32>,
     /// Whether `infinite` was given: the `bestmove` must wait for `stop` even if the
@@ -35,7 +32,21 @@ pub(super) struct SearchRequest {
     pub infinite: bool,
 }
 
+/// One side's clock as a `go` command gives it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct SideClock {
+    /// The time left, from `wtime` or `btime`.
+    pub time: Option<Duration>,
+    /// The time gained after each move, from `winc` or `binc`.
+    pub increment: Option<Duration>,
+}
+
 impl SearchRequest {
+    /// The clock of `colour`, for filling in as the command is parsed.
+    fn clock_mut(&mut self, colour: Colour) -> &mut SideClock {
+        &mut self.clocks[colour.index()]
+    }
+
     /// The limits of a search with `side` to move, keeping `overhead` back from the time
     /// to move.
     ///
@@ -47,9 +58,10 @@ impl SearchRequest {
     /// Returns [`GoError::MissingLimit`] if nothing would end the search: no depth, nodes,
     /// time or `infinite`. A clock for the other side alone does not count.
     pub fn limits(&self, side: Colour, overhead: Duration) -> Result<Limits, GoError> {
-        let clock = self.time[side.index()].map(|time| Clock {
+        let SideClock { time, increment } = self.clocks[side.index()];
+        let clock = time.map(|time| Clock {
             time,
-            increment: self.increment[side.index()].unwrap_or_default(),
+            increment: increment.unwrap_or_default(),
             moves_to_go: self.moves_to_go,
         });
         let time = match (self.movetime, clock) {
@@ -95,13 +107,13 @@ pub(super) fn parse_go(line: &str) -> Result<Go, GoError> {
             "depth" => request.limits.depth = Some(parse_count("depth", value)?),
             "nodes" => request.limits.nodes = Some(parse_count("nodes", value)?),
             "movetime" => request.movetime = Some(parse_millis("movetime", value)?),
-            "wtime" => request.time[Colour::White.index()] = Some(parse_millis("wtime", value)?),
-            "btime" => request.time[Colour::Black.index()] = Some(parse_millis("btime", value)?),
+            "wtime" => request.clock_mut(Colour::White).time = Some(parse_millis("wtime", value)?),
+            "btime" => request.clock_mut(Colour::Black).time = Some(parse_millis("btime", value)?),
             "winc" => {
-                request.increment[Colour::White.index()] = Some(parse_millis("winc", value)?);
+                request.clock_mut(Colour::White).increment = Some(parse_millis("winc", value)?);
             }
             "binc" => {
-                request.increment[Colour::Black.index()] = Some(parse_millis("binc", value)?);
+                request.clock_mut(Colour::Black).increment = Some(parse_millis("binc", value)?);
             }
             "movestogo" => {
                 let moves = parse_count("movestogo", value).ok().filter(|&n| n > 0);

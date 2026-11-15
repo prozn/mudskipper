@@ -120,10 +120,9 @@ fn spawn_input_thread(
 #[derive(Debug)]
 struct Search {
     thread: JoinHandle<()>,
-    /// Whether the `bestmove` must wait for `stop`.
-    infinite: bool,
-    /// Whether `stop` or `quit` has been received.
-    stop_received: bool,
+    /// Whether the `bestmove` must wait for `stop`: set by `go infinite`, cleared by
+    /// `stop`, `quit` or the end of input.
+    wait_for_stop: bool,
     /// The search's `bestmove` line, once it finished, while it waits for `stop`.
     bestmove: Option<String>,
 }
@@ -133,8 +132,10 @@ struct Search {
 struct Engine {
     game: Game,
     options: Options,
-    /// The worker that runs every search. The search thread holds its lock while it
-    /// searches, and the loop touches it only when no search is running.
+    /// The worker that runs every search. The search thread holds its lock for the whole
+    /// search, reporting under it, and the loop touches it only when no search is running,
+    /// so the lock is never contended. It lets the worker stay put rather than travel to
+    /// the search thread and back.
     worker: Arc<Mutex<Worker>>,
     /// The running search, if any.
     search: Option<Search>,
@@ -193,7 +194,11 @@ impl Engine {
                 if self.shutdown == Shutdown::No {
                     self.shutdown = Shutdown::EndOfInput;
                 }
-                if self.search.as_ref().is_some_and(|search| search.infinite) {
+                if self
+                    .search
+                    .as_ref()
+                    .is_some_and(|search| search.wait_for_stop)
+                {
                     self.stop_search();
                 }
             }
@@ -222,7 +227,7 @@ impl Engine {
     /// Tells the running search, if any, to stop and to write its `bestmove`.
     fn stop_search(&mut self) {
         if let Some(search) = &mut self.search {
-            search.stop_received = true;
+            search.wait_for_stop = false;
             self.stop.raise();
         }
     }
@@ -232,7 +237,7 @@ impl Engine {
         let Some(search) = &mut self.search else {
             return Ok(());
         };
-        if search.infinite && !search.stop_received {
+        if search.wait_for_stop {
             return Ok(());
         }
         let Some(bestmove) = search.bestmove.take() else {
@@ -326,8 +331,7 @@ impl Engine {
             })?;
         self.search = Some(Search {
             thread,
-            infinite,
-            stop_received: false,
+            wait_for_stop: infinite,
             bestmove: None,
         });
         Ok(())
