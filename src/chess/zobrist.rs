@@ -3,9 +3,31 @@
 //! The keys come from a fixed-seed integer generator evaluated at compile time, so every
 //! build on every platform hashes positions identically.
 
+use std::fmt;
+
 use super::castling::CastlingRights;
 use super::piece::Piece;
 use super::square::Square;
+
+/// Zobrist key of a position, as returned by [`Board::key`](super::Board::key).
+///
+/// Equal positions have equal keys. Unequal positions almost always have unequal keys.
+/// Formatting with `{:X}` prints the key in hexadecimal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Key(u64);
+
+impl Key {
+    /// Wraps the raw bits of a key.
+    pub(super) const fn new(bits: u64) -> Self {
+        Self(bits)
+    }
+}
+
+impl fmt::UpperHex for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::UpperHex::fmt(&self.0, f)
+    }
+}
 
 /// Key for `piece` standing on `square`.
 pub(super) const fn piece(piece: Piece, square: Square) -> u64 {

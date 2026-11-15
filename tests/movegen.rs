@@ -1,6 +1,6 @@
 //! Move generation, making moves and UCI move notation through the `chess` API (Seam 2).
 
-use mudskipper::chess::{Board, CastlingNotation, MoveList, ParseMoveError};
+use mudskipper::chess::{Board, CastlingNotation, Key, MoveList, ParseMoveError};
 
 /// The quick Perft suite positions, plus one with an en passant capture available.
 const POSITIONS: [&str; 8] = [
@@ -21,7 +21,7 @@ fn boards() -> impl Iterator<Item = Board> {
 }
 
 /// Parses the board's own FEN, which computes its key from scratch.
-fn key_from_scratch(board: &Board) -> u64 {
+fn key_from_scratch(board: &Board) -> Key {
     Board::from_fen(&board.to_fen())
         .expect("printed FEN parses")
         .key()
