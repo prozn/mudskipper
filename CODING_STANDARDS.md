@@ -4,12 +4,12 @@ Read during review. The baseline is the rust-best-practices skill. This file rec
 
 ## Test code is application code
 
-Code under `tests/` (harnesses, helpers, test bodies) follows the application-code side of the baseline, not the library-API rules:
+Code under `tests/` (harnesses, helpers, and test bodies) follows application-code conventions rather than public library-API conventions:
 
-- Write docs as plain prose. `# Panics` and `# Errors` sections are unnecessary: a test helper panicking is how a test fails.
-- Keep helpers concrete and local. Small repeated shapes (a deadline loop, a `try_wait` call) can stay repeated when extracting them would add indirection.
-- Give every assertion a message with the values involved, so a CI failure reads without a rerun.
-- Keep `Drop` impls panic-free. A second panic while a failing test unwinds aborts the whole test binary and hides the original failure.
+- Keep documentation minimal and in plain prose. Do not add `# Panics` or `# Errors` sections to test helpers; panics are an expected way for tests to fail.
+- Prefer simple, concrete, local helpers. Avoid abstractions solely to eliminate small amounts of duplication.
+- Make assertion failures informative. Prefer `assert_eq!` and `assert_ne!` where appropriate; add custom messages when they provide useful context beyond the default output.
+- Keep `Drop` implementations panic-free. Cleanup failures must not cause a second panic during unwinding, which would abort the test process and obscure the original failure.
 
 ## Review against the current ticket
 
