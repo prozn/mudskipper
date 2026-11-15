@@ -4,6 +4,8 @@ use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 
+use super::piece::Colour;
+
 /// One of the 64 squares, numbered from a1 = 0 across each rank to h8 = 63.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Square(u8);
@@ -48,6 +50,22 @@ impl Square {
     #[must_use]
     pub const fn rank(self) -> u8 {
         self.0 / 8
+    }
+
+    /// Rank of the square counted from `colour`'s side, so 0 is its back rank.
+    #[must_use]
+    pub const fn relative_rank(self, colour: Colour) -> u8 {
+        colour.relative_rank(self.rank())
+    }
+
+    /// The square `ranks` ranks forward from `colour`'s point of view, which must be on the
+    /// board.
+    pub(super) const fn forward(self, colour: Colour, ranks: u8) -> Self {
+        let index = match colour {
+            Colour::White => self.0 + 8 * ranks,
+            Colour::Black => self.0 - 8 * ranks,
+        };
+        Self(index)
     }
 }
 

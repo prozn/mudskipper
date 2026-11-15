@@ -3,6 +3,17 @@
 use std::fmt;
 use std::ops::Not;
 
+/// Rank a pawn starts on, counted from its own side as [`Colour::relative_rank`] does.
+pub(super) const PAWN_START_RANK: u8 = 1;
+/// Rank a pawn's double push skips, which becomes the en passant square.
+pub(super) const DOUBLE_PUSH_SKIPPED_RANK: u8 = 2;
+/// Rank a pawn lands on after a double push.
+pub(super) const DOUBLE_PUSH_RANK: u8 = 3;
+/// Rank a pawn must stand on to capture en passant.
+pub(super) const EN_PASSANT_CAPTURER_RANK: u8 = 4;
+/// Rank a pawn promotes on.
+pub(super) const PROMOTION_RANK: u8 = 7;
+
 /// The side a piece belongs to, or the side to move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Colour {
@@ -20,6 +31,24 @@ impl Colour {
     #[must_use]
     pub const fn index(self) -> usize {
         self as usize
+    }
+
+    /// Converts between absolute ranks and ranks counted from this colour's side.
+    ///
+    /// Rank 0 is this colour's back rank and rank 7 the opponent's. The conversion is its
+    /// own inverse, so it maps a relative rank to an absolute one and back.
+    #[must_use]
+    pub const fn relative_rank(self, rank: u8) -> u8 {
+        match self {
+            Self::White => rank,
+            Self::Black => 7 - rank,
+        }
+    }
+
+    /// The absolute rank this colour's pieces start on: 0 for white, 7 for black.
+    #[must_use]
+    pub const fn back_rank(self) -> u8 {
+        self.relative_rank(0)
     }
 }
 

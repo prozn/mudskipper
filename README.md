@@ -6,8 +6,11 @@ UCI GUI (Cute Chess, Arena, Banksia, En Croissant) or match runner (fastchess,
 cutechess-cli, OpenBench).
 
 It is at an early stage: the binary completes the UCI handshake and sets up positions with
-`position startpos` or `position fen <fen>`, but does not play yet. The non-standard `d`
-command prints the current board, its FEN and its Zobrist key.
+`position startpos` or `position fen <fen>`, optionally followed by `moves ...`, but does
+not play yet. Two non-standard commands help with debugging:
+
+- `d` prints the current board, its FEN and its Zobrist key.
+- `go perft <depth>` prints the **Perft** count below each legal move, then the total.
 
 ## Building
 
@@ -57,6 +60,18 @@ cargo test
 ```
 
 CI runs the same three checks on Linux and Windows.
+
+The deep **Perft** suite is too slow for CI. Run it by hand in release mode:
+
+```sh
+cargo test --release --test perft -- --ignored
+```
+
+Criterion benchmarks cover move generation, making moves and perft:
+
+```sh
+cargo bench
+```
 
 ## License
 

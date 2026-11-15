@@ -6,7 +6,9 @@ use std::str::FromStr;
 
 use super::Board;
 use crate::chess::castling::{CastlingRights, CastlingSide};
-use crate::chess::piece::{Colour, Piece, PieceType};
+use crate::chess::piece::{
+    Colour, DOUBLE_PUSH_RANK, DOUBLE_PUSH_SKIPPED_RANK, PAWN_START_RANK, Piece, PieceType,
+};
 use crate::chess::square::Square;
 
 /// Error returned when text is not a valid FEN position.
@@ -264,10 +266,11 @@ fn parse_placement(board: &mut Board, field: &str) -> Result<(), ParseFenError> 
 
     let pawns =
         board.pieces(Colour::White, PieceType::Pawn) | board.pieces(Colour::Black, PieceType::Pawn);
-    if let Some(square) = pawns
-        .into_iter()
-        .find(|sq| sq.rank() == 0 || sq.rank() == 7)
-    {
+    if let Some(square) = pawns.into_iter().find(|sq| {
+        Colour::ALL
+            .iter()
+            .any(|colour| sq.rank() == colour.back_rank())
+    }) {
         return Err(ParseFenError::PawnOnBackRank { square });
     }
     Ok(())
@@ -315,10 +318,7 @@ fn parse_castling(board: &Board, field: &str) -> Result<CastlingRights, ParseFen
 
 /// The rook of `colour` furthest from its king on `side`, if the king is on its back rank.
 fn outermost_rook(board: &Board, colour: Colour, side: CastlingSide) -> Option<Square> {
-    let back_rank = match colour {
-        Colour::White => 0,
-        Colour::Black => 7,
-    };
+    let back_rank = colour.back_rank();
     let king = board.pieces(colour, PieceType::King).into_iter().next()?;
     if king.rank() != back_rank {
         return None;
@@ -342,10 +342,12 @@ fn parse_en_passant(board: &Board, field: &str) -> Result<Option<Square>, ParseF
 
     // The opponent's pawn has just moved two ranks, from `origin_rank` to `pawn_rank`,
     // skipping `square`.
-    let (target_rank, pawn_rank, origin_rank) = match board.side_to_move {
-        Colour::White => (5, 4, 6),
-        Colour::Black => (2, 3, 1),
-    };
+    let pusher = !board.side_to_move;
+    let (target_rank, pawn_rank, origin_rank) = (
+        pusher.relative_rank(DOUBLE_PUSH_SKIPPED_RANK),
+        pusher.relative_rank(DOUBLE_PUSH_RANK),
+        pusher.relative_rank(PAWN_START_RANK),
+    );
     if square.rank() != target_rank {
         return Err(invalid());
     }

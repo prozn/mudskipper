@@ -1,12 +1,15 @@
 //! The board: piece placement plus the rest of the game state that FEN records.
 
 mod fen;
+mod make;
+mod movegen;
 
 pub use fen::ParseFenError;
 
+use super::attacks;
 use super::bitboard::Bitboard;
 use super::castling::CastlingRights;
-use super::piece::{Colour, Piece, PieceType};
+use super::piece::{Colour, EN_PASSANT_CAPTURER_RANK, Piece, PieceType};
 use super::square::Square;
 use super::zobrist;
 
@@ -118,10 +121,7 @@ impl Board {
     /// Only then does the en passant square change which moves are available, so only then
     /// is it part of the key.
     fn can_capture_en_passant(&self, target: Square) -> bool {
-        let capturer_rank = match self.side_to_move {
-            Colour::White => target.rank() - 1,
-            Colour::Black => target.rank() + 1,
-        };
+        let capturer_rank = self.side_to_move.relative_rank(EN_PASSANT_CAPTURER_RANK);
         let pawns = self.pieces(self.side_to_move, PieceType::Pawn);
         [target.file().checked_sub(1), target.file().checked_add(1)]
             .into_iter()
@@ -145,7 +145,58 @@ impl Board {
         }
     }
 
-    /// Places `piece` on the empty `square`.
+    /// Reports whether the side to move is in check.
+    #[must_use]
+    pub fn in_check(&self) -> bool {
+        self.is_attacked(
+            self.king(self.side_to_move),
+            !self.side_to_move,
+            self.occupied(),
+        )
+    }
+
+    /// Squares holding a piece of either colour.
+    const fn occupied(&self) -> Bitboard {
+        Bitboard::from_bits(self.colours[0].bits() | self.colours[1].bits())
+    }
+
+    /// Squares holding a piece of `colour`.
+    const fn colour(&self, colour: Colour) -> Bitboard {
+        self.colours[colour.index()]
+    }
+
+    /// Squares holding a piece of type `piece_type`, of either colour.
+    const fn piece_type(&self, piece_type: PieceType) -> Bitboard {
+        self.pieces[piece_type.index()]
+    }
+
+    /// The square of `colour`'s king.
+    fn king(&self, colour: Colour) -> Square {
+        self.pieces(colour, PieceType::King)
+            .first()
+            .expect("each side has exactly one king")
+    }
+
+    /// Pieces of either colour attacking `square`, with `occupied` as the blockers for
+    /// sliding pieces.
+    fn attackers_to(&self, square: Square, occupied: Bitboard) -> Bitboard {
+        let diagonal = self.piece_type(PieceType::Bishop) | self.piece_type(PieceType::Queen);
+        let straight = self.piece_type(PieceType::Rook) | self.piece_type(PieceType::Queen);
+        (attacks::pawn(Colour::White, square) & self.pieces(Colour::Black, PieceType::Pawn))
+            | (attacks::pawn(Colour::Black, square) & self.pieces(Colour::White, PieceType::Pawn))
+            | (attacks::knight(square) & self.piece_type(PieceType::Knight))
+            | (attacks::king(square) & self.piece_type(PieceType::King))
+            | (attacks::bishop(square, occupied) & diagonal)
+            | (attacks::rook(square, occupied) & straight)
+    }
+
+    /// Reports whether a piece of colour `by` attacks `square`, with `occupied` as the
+    /// blockers for sliding pieces.
+    fn is_attacked(&self, square: Square, by: Colour, occupied: Bitboard) -> bool {
+        !(self.attackers_to(square, occupied) & self.colour(by)).is_empty()
+    }
+
+    /// Places `piece` on the empty `square`, updating the key.
     fn put_piece(&mut self, piece: Piece, square: Square) {
         debug_assert!(
             self.mailbox[square.index()].is_none(),
@@ -155,5 +206,18 @@ impl Board {
         self.mailbox[square.index()] = Some(piece);
         self.pieces[piece.piece_type().index()] ^= bb;
         self.colours[piece.colour().index()] ^= bb;
+        self.key ^= zobrist::piece(piece, square);
+    }
+
+    /// Removes and returns the piece on the occupied `square`, updating the key.
+    fn remove_piece(&mut self, square: Square) -> Piece {
+        let piece = self.mailbox[square.index()]
+            .take()
+            .unwrap_or_else(|| panic!("{square} should be occupied"));
+        let bb = Bitboard::from_square(square);
+        self.pieces[piece.piece_type().index()] ^= bb;
+        self.colours[piece.colour().index()] ^= bb;
+        self.key ^= zobrist::piece(piece, square);
+        piece
     }
 }
