@@ -34,6 +34,11 @@ pub enum ParseFenError {
         /// Number of squares it describes.
         squares: usize,
     },
+    /// A rank in the placement field has two empty-square counts in a row, such as `44`.
+    SplitEmptyRun {
+        /// The rank, from 1 to 8.
+        rank: u8,
+    },
     /// The placement field holds a character that is neither a piece letter nor 1 to 8.
     InvalidPiece {
         /// The offending character.
@@ -76,9 +81,12 @@ impl fmt::Display for ParseFenError {
             Self::WrongRankLength { rank, squares } => {
                 write!(f, "rank {rank} describes {squares} squares, need 8")
             }
+            Self::SplitEmptyRun { rank } => {
+                write!(f, "rank {rank} has two empty-square counts in a row")
+            }
             Self::InvalidPiece { found } => write!(f, "invalid piece character {found:?}"),
             Self::WrongKingCount { colour, found } => {
-                write!(f, "{colour:?} has {found} kings, need exactly 1")
+                write!(f, "{colour} has {found} kings, need exactly 1")
             }
             Self::PawnOnBackRank { square } => write!(f, "pawn on back rank square {square}"),
             Self::InvalidSideToMove(field) => write!(f, "invalid side to move {field:?}"),
@@ -124,14 +132,12 @@ impl Board {
         board.castling = parse_castling(&board, fields[2])?;
         board.en_passant = parse_en_passant(&board, fields[3])?;
         if let Some(&field) = fields.get(4) {
-            board.halfmove_clock = field
-                .parse()
-                .map_err(|_| ParseFenError::InvalidHalfmoveClock(field.to_owned()))?;
+            board.halfmove_clock = parse_counter(field)
+                .ok_or_else(|| ParseFenError::InvalidHalfmoveClock(field.to_owned()))?;
         }
         if let Some(&field) = fields.get(5) {
-            board.fullmove_number = field
-                .parse()
-                .map_err(|_| ParseFenError::InvalidFullmoveNumber(field.to_owned()))?;
+            board.fullmove_number = parse_counter(field)
+                .ok_or_else(|| ParseFenError::InvalidFullmoveNumber(field.to_owned()))?;
         }
         board.key = board.compute_key();
         Ok(board)
@@ -219,10 +225,16 @@ fn parse_placement(board: &mut Board, field: &str) -> Result<(), ParseFenError> 
 
     for (rank, text) in (0..8u8).rev().zip(ranks) {
         let mut squares = 0usize;
+        let mut after_run = false;
         for c in text.chars() {
             if let Some(run @ 1..=8) = c.to_digit(10) {
+                if after_run {
+                    return Err(ParseFenError::SplitEmptyRun { rank: rank + 1 });
+                }
                 squares += run as usize;
+                after_run = true;
             } else {
+                after_run = false;
                 let piece = Piece::from_char(c).ok_or(ParseFenError::InvalidPiece { found: c })?;
                 // Squares past the h-file are counted but not placed; the length check
                 // below rejects the rank.
@@ -259,6 +271,15 @@ fn parse_placement(board: &mut Board, field: &str) -> Result<(), ParseFenError> 
         return Err(ParseFenError::PawnOnBackRank { square });
     }
     Ok(())
+}
+
+/// Parses a move counter written as plain decimal digits, with no sign.
+fn parse_counter(field: &str) -> Option<u16> {
+    if field.bytes().all(|b| b.is_ascii_digit()) {
+        field.parse().ok()
+    } else {
+        None
+    }
 }
 
 fn parse_side_to_move(field: &str) -> Result<Colour, ParseFenError> {

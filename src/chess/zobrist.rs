@@ -16,7 +16,7 @@ pub(super) const fn piece(piece: Piece, square: Square) -> u64 {
 ///
 /// The square alone identifies the right, because each colour's rooks start on its own
 /// back rank.
-pub(super) const fn castling(rook: Square) -> u64 {
+const fn castling(rook: Square) -> u64 {
     KEYS.castling[rook.index()]
 }
 

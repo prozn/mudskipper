@@ -127,6 +127,11 @@ fn fen_with_bad_ranks_is_rejected() {
         },
     );
     assert_rejected(
+        "rnbqkbnr/pppppppp/8/8/44/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "two empty runs in a row",
+        |e| *e == ParseFenError::SplitEmptyRun { rank: 4 },
+    );
+    assert_rejected(
         "rnbqkbnr/pppppppp/8/8/3x4/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
         "an unknown piece letter",
         |e| *e == ParseFenError::InvalidPiece { found: 'x' },
@@ -140,6 +145,8 @@ fn fen_with_bad_ranks_is_rejected() {
 
 #[test]
 fn fen_describing_an_impossible_position_is_rejected() {
+    let err = Board::from_fen("8/8/8/8/8/8/8/4K3 w - - 0 1").expect_err("no black king");
+    assert_eq!(err.to_string(), "black has 0 kings, need exactly 1");
     assert_rejected(
         "rnbq1bnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQ - 0 1",
         "a missing black king",
@@ -256,6 +263,11 @@ fn fen_with_bad_clocks_is_rejected() {
         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 one",
         "a non-numeric fullmove number",
         |e| *e == ParseFenError::InvalidFullmoveNumber("one".to_owned()),
+    );
+    assert_rejected(
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - +5 1",
+        "a signed halfmove clock",
+        |e| *e == ParseFenError::InvalidHalfmoveClock("+5".to_owned()),
     );
 }
 

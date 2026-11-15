@@ -1,5 +1,6 @@
 //! Colours, piece types and pieces.
 
+use std::fmt;
 use std::ops::Not;
 
 /// The side a piece belongs to, or the side to move.
@@ -19,6 +20,15 @@ impl Colour {
     #[must_use]
     pub const fn index(self) -> usize {
         self as usize
+    }
+}
+
+impl fmt::Display for Colour {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::White => "white",
+            Self::Black => "black",
+        })
     }
 }
 
