@@ -5,15 +5,21 @@ Mudskipper is a UCI chess engine written in Rust. It speaks the
 UCI GUI (Cute Chess, Arena, Banksia, En Croissant) or match runner (fastchess,
 cutechess-cli, OpenBench).
 
-It is at an early stage: the binary completes the UCI handshake and sets up positions with
-`position startpos` or `position fen <fen>`, optionally followed by `moves ...`, but does
-not play yet. It supports **Chess960**: FENs may use **X-FEN** or **Shredder-FEN** castling
-rights, and with the `UCI_Chess960` option on, castling moves are read and written as the
-king taking its own rook (`e1h1`) rather than as the king's move (`e1g1`). Two
-non-standard commands help with debugging:
+It is at an early stage. It sets up positions with `position startpos` or
+`position fen <fen>`, optionally followed by `moves ...`, and searches them with
+`go depth <plies>` or `go nodes <count>`, replying with `info` lines and a `bestmove`. Time
+controls, `go infinite` and `stop` are not supported yet. The search is a plain alpha-beta
+search with quiescence search over a PeSTO-style tapered evaluation.
+
+It supports **Chess960**: FENs may use **X-FEN** or **Shredder-FEN** castling rights, and
+with the `UCI_Chess960` option on, castling moves are read and written as the king taking
+its own rook (`e1h1`) rather than as the king's move (`e1g1`). Three non-standard commands
+help with debugging:
 
 - `d` prints the current board, its FEN (Shredder-FEN with `UCI_Chess960` on) and its
   Zobrist key.
+- `eval` prints the static evaluation of the current position in centipawns, from White's
+  point of view.
 - `go perft <depth>` prints the **Perft** count below each legal move, then the total.
 
 ## Building

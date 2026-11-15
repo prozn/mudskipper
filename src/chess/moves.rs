@@ -256,6 +256,9 @@ pub struct MoveList {
 }
 
 impl MoveList {
+    /// The most moves a list can hold, which is more than any position has.
+    pub const CAPACITY: usize = MAX_MOVES;
+
     /// Returns an empty list.
     #[must_use]
     pub const fn new() -> Self {
