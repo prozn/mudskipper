@@ -5,7 +5,9 @@ Mudskipper is a UCI chess engine written in Rust. It speaks the
 UCI GUI (Cute Chess, Arena, Banksia, En Croissant) or match runner (fastchess,
 cutechess-cli, OpenBench).
 
-It is at an early stage: the binary completes the UCI handshake but does not play yet.
+It is at an early stage: the binary completes the UCI handshake and sets up positions with
+`position startpos` or `position fen <fen>`, but does not play yet. The non-standard `d`
+command prints the current board, its FEN and its Zobrist key.
 
 ## Building
 
