@@ -1,0 +1,40 @@
+[package]
+name = "mudskipper"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "A UCI chess engine"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/prozn/mudskipper"
+readme = "README.md"
+publish = false
+
+# No runtime dependencies (ADR-0005).
+[dependencies]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+# Rustdoc's default warnings become errors. They fire only when `cargo doc` runs.
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+invalid_codeblock_attributes = "deny"
+invalid_rust_codeblocks = "deny"
+invalid_html_tags = "deny"
+bare_urls = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Engine code converts between squares, indices, scores and counters constantly;
+# these casts are deliberate and bounds are checked where they matter.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
