@@ -11,8 +11,37 @@ const NAME: &str = concat!("Mudskipper ", env!("CARGO_PKG_VERSION"));
 /// Author reported in reply to `uci`.
 const AUTHOR: &str = "Prozn";
 
-/// Name of the check option that selects Chess960 castling notation.
+/// Name of the check option that switches Chess960 mode on and off.
 const CHESS960_OPTION: &str = "UCI_Chess960";
+
+/// Whether the `UCI_Chess960` option is on, which decides how castling moves and FENs are
+/// written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// `UCI_Chess960` off: castling is the king's move, such as `e1g1`, and FENs are X-FEN.
+    Standard,
+    /// `UCI_Chess960` on: castling is king takes rook, such as `e1h1`, and FENs are
+    /// Shredder-FEN.
+    Chess960,
+}
+
+impl Mode {
+    /// How castling moves are read and written in this mode.
+    const fn castling_notation(self) -> CastlingNotation {
+        match self {
+            Self::Standard => CastlingNotation::Standard,
+            Self::Chess960 => CastlingNotation::KingTakesRook,
+        }
+    }
+
+    /// The FEN of `board` as this mode writes it.
+    fn fen(self, board: &Board) -> String {
+        match self {
+            Self::Standard => board.to_fen(),
+            Self::Chess960 => board.to_shredder_fen(),
+        }
+    }
+}
 
 /// Runs the UCI loop, reading commands from `input` and writing replies to `output`.
 ///
@@ -25,7 +54,7 @@ const CHESS960_OPTION: &str = "UCI_Chess960";
 /// Returns any I/O error from reading `input` or writing `output`.
 pub fn run(mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
     let mut board = Board::startpos();
-    let mut notation = CastlingNotation::Standard;
+    let mut mode = Mode::Standard;
     let mut buf = Vec::new();
     loop {
         buf.clear();
@@ -50,15 +79,15 @@ pub fn run(mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
             }
             Some("isready") => writeln!(output, "readyok")?,
             Some("setoption") => match parse_setoption(line) {
-                Ok(new_notation) => notation = new_notation,
+                Ok(new_mode) => mode = new_mode,
                 Err(err) => writeln!(output, "info string invalid setoption: {err}")?,
             },
-            Some("position") => match parse_position(line, notation) {
+            Some("position") => match parse_position(line, mode.castling_notation()) {
                 Ok(new_board) => board = new_board,
                 Err(err) => writeln!(output, "info string invalid position: {err}")?,
             },
-            Some("go") => go(&mut output, &board, notation, line)?,
-            Some("d") => write_board(&mut output, &board, notation)?,
+            Some("go") => go(&mut output, &board, mode.castling_notation(), line)?,
+            Some("d") => write_board(&mut output, &board, mode)?,
             Some("quit") => break,
             Some(_) => writeln!(output, "info string unknown command: {}", line.trim())?,
         }
@@ -133,11 +162,11 @@ fn write_split_perft(
     writeln!(output, "Nodes searched: {total}")
 }
 
-/// Parses a `setoption` command into the castling notation it selects.
+/// Parses a `setoption` command into the mode it selects.
 ///
 /// `UCI_Chess960` is the only option so far. Option names are matched ignoring case, as
 /// the UCI protocol asks.
-fn parse_setoption(line: &str) -> Result<CastlingNotation, SetOptionError> {
+fn parse_setoption(line: &str) -> Result<Mode, SetOptionError> {
     let args: Vec<&str> = line.split_whitespace().skip(1).collect();
     let Some((&"name", rest)) = args.split_first() else {
         return Err(SetOptionError::MissingName);
@@ -150,8 +179,8 @@ fn parse_setoption(line: &str) -> Result<CastlingNotation, SetOptionError> {
         return Err(SetOptionError::UnknownOption(name));
     }
     match value.as_deref() {
-        Some("true") => Ok(CastlingNotation::KingTakesRook),
-        Some("false") => Ok(CastlingNotation::Standard),
+        Some("true") => Ok(Mode::Chess960),
+        Some("false") => Ok(Mode::Standard),
         Some(value) => Err(SetOptionError::InvalidValue(value.to_owned())),
         None => Err(SetOptionError::MissingValue),
     }
@@ -211,11 +240,7 @@ impl fmt::Display for PositionError {
 /// Writes the reply to `d`: a diagram of the board, its FEN and its Zobrist key.
 ///
 /// With `UCI_Chess960` on, the FEN is Shredder-FEN.
-fn write_board(
-    output: &mut impl Write,
-    board: &Board,
-    notation: CastlingNotation,
-) -> io::Result<()> {
+fn write_board(output: &mut impl Write, board: &Board, mode: Mode) -> io::Result<()> {
     const BORDER: &str = " +---+---+---+---+---+---+---+---+";
     writeln!(output, "{BORDER}")?;
     for (rank, squares) in Square::ALL.chunks(8).enumerate().rev() {
@@ -229,10 +254,6 @@ fn write_board(
     }
     writeln!(output, "   a   b   c   d   e   f   g   h")?;
     writeln!(output)?;
-    let fen = match notation {
-        CastlingNotation::Standard => board.to_fen(),
-        CastlingNotation::KingTakesRook => board.to_shredder_fen(),
-    };
-    writeln!(output, "Fen: {fen}")?;
+    writeln!(output, "Fen: {}", mode.fen(board))?;
     writeln!(output, "Key: {:016X}", board.key())
 }

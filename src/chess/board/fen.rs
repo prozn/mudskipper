@@ -155,17 +155,17 @@ impl Board {
     /// other rook.
     #[must_use]
     pub fn to_fen(&self) -> String {
-        self.fen(CastlingStyle::XFen)
+        self.format_fen(CastlingStyle::XFen)
     }
 
     /// Prints the position as Shredder-FEN, which writes each castling right as the file
     /// of its rook, such as `HAha` for the standard start position.
     #[must_use]
     pub fn to_shredder_fen(&self) -> String {
-        self.fen(CastlingStyle::Shredder)
+        self.format_fen(CastlingStyle::Shredder)
     }
 
-    fn fen(&self, style: CastlingStyle) -> String {
+    fn format_fen(&self, style: CastlingStyle) -> String {
         let mut fen = String::with_capacity(90);
         for (i, rank) in Square::ALL.chunks(8).rev().enumerate() {
             if i > 0 {
@@ -201,7 +201,13 @@ impl Board {
         for colour in Colour::ALL {
             for side in CastlingSide::ALL {
                 if let Some(rook) = self.castling.rook(colour, side) {
-                    let letter = CastlingLetter::for_right(self, colour, side, rook, style);
+                    let letter = if style == CastlingStyle::XFen
+                        && outermost_rook(self, colour, side) == Some(rook)
+                    {
+                        CastlingLetter::Outermost(side)
+                    } else {
+                        CastlingLetter::File(rook.file())
+                    };
                     fen.push(letter.to_char(colour));
                 }
             }
@@ -358,21 +364,6 @@ impl CastlingLetter {
         Some((colour, letter))
     }
 
-    /// The letter that names `colour`'s right to castle on `side` with the rook on `rook`.
-    fn for_right(
-        board: &Board,
-        colour: Colour,
-        side: CastlingSide,
-        rook: Square,
-        style: CastlingStyle,
-    ) -> Self {
-        if style == CastlingStyle::XFen && outermost_rook(board, colour, side) == Some(rook) {
-            Self::Outermost(side)
-        } else {
-            Self::File(rook.file())
-        }
-    }
-
     /// The castling field character for `colour`.
     fn to_char(self, colour: Colour) -> char {
         let c = match self {
@@ -392,16 +383,15 @@ impl CastlingLetter {
         match self {
             Self::Outermost(side) => Some((side, outermost_rook(board, colour, side)?)),
             Self::File(file) => {
-                let king = board.king(colour);
+                let king = back_rank_king(board, colour)?;
                 let rook = Square::from_coords(file, colour.back_rank())?;
                 let side = match file.cmp(&king.file()) {
                     Ordering::Greater => CastlingSide::King,
                     Ordering::Less => CastlingSide::Queen,
                     Ordering::Equal => return None,
                 };
-                (king.rank() == colour.back_rank()
-                    && board.piece_at(rook) == Some(Piece::new(colour, PieceType::Rook)))
-                .then_some((side, rook))
+                (board.piece_at(rook) == Some(Piece::new(colour, PieceType::Rook)))
+                    .then_some((side, rook))
             }
         }
     }
@@ -410,10 +400,7 @@ impl CastlingLetter {
 /// The rook of `colour` furthest from its king on `side`, if the king is on its back rank.
 fn outermost_rook(board: &Board, colour: Colour, side: CastlingSide) -> Option<Square> {
     let back_rank = colour.back_rank();
-    let king = board.king(colour);
-    if king.rank() != back_rank {
-        return None;
-    }
+    let king = back_rank_king(board, colour)?;
     let is_rook = |file| {
         let square = Square::from_coords(file, back_rank)?;
         (board.piece_at(square) == Some(Piece::new(colour, PieceType::Rook))).then_some(square)
@@ -422,6 +409,12 @@ fn outermost_rook(board: &Board, colour: Colour, side: CastlingSide) -> Option<S
         CastlingSide::King => (king.file() + 1..8).rev().find_map(is_rook),
         CastlingSide::Queen => (0..king.file()).find_map(is_rook),
     }
+}
+
+/// The square of `colour`'s king, if it stands on its back rank, as castling needs.
+fn back_rank_king(board: &Board, colour: Colour) -> Option<Square> {
+    let king = board.king(colour);
+    (king.rank() == colour.back_rank()).then_some(king)
 }
 
 fn parse_en_passant(board: &Board, field: &str) -> Result<Option<Square>, ParseFenError> {
