@@ -12,7 +12,8 @@ impl Board {
     /// Reports whether the game is drawn by the fifty-move rule.
     ///
     /// The rule applies once a hundred halfmoves have passed without a capture or pawn
-    /// move, unless the last of them delivered checkmate.
+    /// move, unless the last of them delivered checkmate. FIDE lets a player claim the draw
+    /// at this point; like other engines, this treats the claimable draw as a draw.
     #[must_use]
     pub fn is_fifty_move_draw(&self) -> bool {
         self.halfmove_clock >= FIFTY_MOVE_LIMIT
@@ -36,6 +37,6 @@ impl Board {
         (knights | bishops).count() <= 1
             || (knights.is_empty()
                 && ((bishops & Bitboard::LIGHT_SQUARES).is_empty()
-                    || (bishops & !Bitboard::LIGHT_SQUARES).is_empty()))
+                    || (bishops & Bitboard::DARK_SQUARES).is_empty()))
     }
 }
