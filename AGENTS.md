@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues for prozn/mudskipper, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues for prozn/mudskipper. Read `docs/agents/issue-tracker.md` before your first `gh` command; it has the exact commands to use.
 
 ### Triage labels
 
