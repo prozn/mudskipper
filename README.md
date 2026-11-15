@@ -7,9 +7,13 @@ cutechess-cli, OpenBench).
 
 It is at an early stage: the binary completes the UCI handshake and sets up positions with
 `position startpos` or `position fen <fen>`, optionally followed by `moves ...`, but does
-not play yet. Two non-standard commands help with debugging:
+not play yet. It supports **Chess960**: FENs may use **X-FEN** or **Shredder-FEN** castling
+rights, and with the `UCI_Chess960` option on, castling moves are read and written as the
+king taking its own rook (`e1h1`) rather than as the king's move (`e1g1`). Two
+non-standard commands help with debugging:
 
-- `d` prints the current board, its FEN and its Zobrist key.
+- `d` prints the current board, its FEN (Shredder-FEN with `UCI_Chess960` on) and its
+  Zobrist key.
 - `go perft <depth>` prints the **Perft** count below each legal move, then the total.
 
 ## Building

@@ -32,3 +32,9 @@ _Avoid_: Fischer Random, FRC (in code)
 
 **DFRC**:
 Double Fischer Random Chess: Chess960 where White and Black have independently shuffled back ranks. Used as an opening source for **SPRT**.
+
+**X-FEN**:
+A FEN castling notation that writes `KQkq` for the outermost rook on each side of the king and the rook's file (`A`-`H`, `a`-`h`) for any other rook. Standard positions print as standard FEN; `Board::to_fen` uses it.
+
+**Shredder-FEN**:
+A FEN castling notation that always writes the rook's file, such as `HAha` for the standard start position. `d` prints it when `UCI_Chess960` is on.

@@ -3,6 +3,7 @@
 use std::fmt;
 use std::ops::Deref;
 
+use super::notation::CastlingNotation;
 use super::piece::PieceType;
 use super::square::Square;
 
@@ -236,15 +237,9 @@ impl fmt::Display for Move {
     /// Writes the move in UCI notation, such as `e2e4` or `e7e8q`.
     ///
     /// Castling is written as the king's move, such as `e1g1`, and the null move as `0000`.
+    /// Use [`Move::display`] to write castling as the king taking its rook.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_null() {
-            return f.write_str("0000");
-        }
-        write!(f, "{}{}", self.from(), self.destination())?;
-        if let Some(piece_type) = self.promotion() {
-            write!(f, "{}", promotion_letter(piece_type))?;
-        }
-        Ok(())
+        self.display(CastlingNotation::Standard).fmt(f)
     }
 }
 
