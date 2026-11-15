@@ -42,7 +42,10 @@ impl Game {
 
     /// Plays `mv`, recording the current position in the history.
     ///
-    /// `mv` must be legal in the current position, as [`Board::make`] requires.
+    /// # Panics
+    ///
+    /// `mv` must be legal in the current position. Playing any other move may panic or
+    /// leave the board inconsistent, as with [`Board::make`].
     pub fn play(&mut self, mv: Move) {
         self.history.push(self.board.key());
         self.board = self.board.make(mv);

@@ -820,11 +820,14 @@ fn go_with_little_clock_time_never_exceeds_the_time_left_minus_move_overhead() {
 #[test]
 fn malformed_clock_parameters_get_info_strings() {
     let mut engine = Engine::start();
+    // White is to move, so a clock for Black alone says nothing about when to stop.
     for command in [
         "go wtime",
         "go wtime -1",
         "go btime 1000 binc x",
         "go movestogo 0",
+        "go btime 1000",
+        "go winc 100 movestogo 10",
     ] {
         engine.send(command);
         let reply = engine.expect_info_string();

@@ -6,6 +6,17 @@ use std::time::Duration;
 /// remaining time is spread over them.
 const DEFAULT_MOVES_TO_GO: u32 = 30;
 
+/// The share of the increment, in quarters, added to each move's planned time. Spending
+/// all of it would leave nothing for the moves where the search runs long.
+const INCREMENT_QUARTERS: u32 = 3;
+
+/// How many times the planned time a search may run to finish an iteration.
+const OVERRUN_FACTOR: u32 = 3;
+
+/// The share of the time left, in quarters, that one move may never exceed, so that the
+/// clock cannot run out on a single move.
+const CEILING_QUARTERS: u32 = 3;
+
 /// The side to move's clock in a game played with a time control.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Clock {
@@ -48,12 +59,12 @@ impl TimeLimit {
     #[must_use]
     pub fn clock(clock: Clock, overhead: Duration) -> Self {
         let available = clock.time.saturating_sub(overhead);
-        let ceiling = available * 3 / 4;
+        let ceiling = available * CEILING_QUARTERS / 4;
         let moves = clock.moves_to_go.unwrap_or(DEFAULT_MOVES_TO_GO).max(1);
-        let soft = (available / moves + clock.increment * 3 / 4).min(ceiling);
+        let soft = (available / moves + clock.increment * INCREMENT_QUARTERS / 4).min(ceiling);
         Self {
             soft,
-            hard: (soft * 3).min(ceiling),
+            hard: (soft * OVERRUN_FACTOR).min(ceiling),
         }
     }
 }

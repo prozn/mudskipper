@@ -41,7 +41,12 @@ impl SearchRequest {
     ///
     /// `movetime` takes precedence over the clock. Without either, the search has no time
     /// limit.
-    pub fn limits(&self, side: Colour, overhead: Duration) -> Limits {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GoError::MissingLimit`] if nothing would end the search: no depth, nodes,
+    /// time or `infinite`. A clock for the other side alone does not count.
+    pub fn limits(&self, side: Colour, overhead: Duration) -> Result<Limits, GoError> {
         let clock = self.time[side.index()].map(|time| Clock {
             time,
             increment: self.increment[side.index()].unwrap_or_default(),
@@ -52,18 +57,14 @@ impl SearchRequest {
             (None, Some(clock)) => Some(TimeLimit::clock(clock, overhead)),
             (None, None) => None,
         };
-        Limits {
+        let limits = Limits {
             time,
             ..self.limits
+        };
+        if limits == Limits::default() && !self.infinite {
+            return Err(GoError::MissingLimit);
         }
-    }
-
-    /// Reports whether anything says when the search should end.
-    fn has_limit(&self) -> bool {
-        self.limits != Limits::default()
-            || self.movetime.is_some()
-            || self.time.iter().any(Option::is_some)
-            || self.infinite
+        Ok(limits)
     }
 }
 
@@ -112,9 +113,6 @@ pub(super) fn parse_go(line: &str) -> Result<Go, GoError> {
             other => return Err(GoError::Unsupported(other.to_owned())),
         }
     }
-    if !request.has_limit() {
-        return Err(GoError::MissingLimit);
-    }
     Ok(Go::Search(request))
 }
 
@@ -158,9 +156,9 @@ impl fmt::Display for GoError {
                 write!(f, "invalid {parameter} {value:?}")
             }
             Self::Unsupported(name) => write!(f, "unsupported parameter {name:?}"),
-            Self::MissingLimit => {
-                f.write_str("expected depth, nodes, movetime, wtime, btime or infinite")
-            }
+            Self::MissingLimit => f.write_str(
+                "expected depth, nodes, movetime, infinite, or the side to move's wtime or btime",
+            ),
         }
     }
 }

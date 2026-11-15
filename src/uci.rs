@@ -13,9 +13,9 @@ use std::thread::{self, JoinHandle};
 
 use crate::chess::{Board, CastlingNotation, Game, ParseFenError, ParseMoveError, Piece, Square};
 use crate::eval;
-use crate::search::{Report, Score, StopFlag, Worker};
+use crate::search::{Limits, Report, Score, StopFlag, Worker};
 
-use go::{Go, SearchRequest, parse_go};
+use go::{Go, parse_go};
 use options::Options;
 
 /// Engine name reported in reply to `uci`.
@@ -143,10 +143,18 @@ struct Engine {
     events: Sender<Event>,
     /// Commands received during the search, to run once it ends.
     deferred: VecDeque<Vec<u8>>,
-    /// Whether to exit once no search is running: `quit` was received or input ended.
-    exiting: bool,
-    /// Whether `quit` was received, so commands still waiting should be dropped.
-    quit: bool,
+    shutdown: Shutdown,
+}
+
+/// Whether and how the UCI loop is winding down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shutdown {
+    /// Running normally.
+    No,
+    /// Input ended: exit once the search and any commands still waiting are done.
+    EndOfInput,
+    /// `quit` was received: exit once the search stops, dropping commands still waiting.
+    Quit,
 }
 
 impl Engine {
@@ -161,8 +169,7 @@ impl Engine {
             stop,
             events,
             deferred: VecDeque::new(),
-            exiting: false,
-            quit: false,
+            shutdown: Shutdown::No,
         }
     }
 
@@ -171,29 +178,23 @@ impl Engine {
         match event {
             Event::Line(line) => match &mut self.search {
                 None => self.execute(&line, output)?,
-                Some(search) => match first_word(&line) {
-                    Some("stop") => {
-                        search.stop_received = true;
-                        self.stop.raise();
-                    }
+                Some(_) => match first_word(&line) {
+                    Some("stop") => self.stop_search(),
                     Some("isready") => writeln!(output, "readyok")?,
                     Some("quit") => {
-                        search.stop_received = true;
-                        self.stop.raise();
-                        self.exiting = true;
-                        self.quit = true;
+                        self.stop_search();
+                        self.shutdown = Shutdown::Quit;
                     }
                     _ => self.deferred.push_back(line),
                 },
             },
             Event::InputEnd(result) => {
                 result?;
-                self.exiting = true;
-                if let Some(search) = &mut self.search
-                    && search.infinite
-                {
-                    search.stop_received = true;
-                    self.stop.raise();
+                if self.shutdown == Shutdown::No {
+                    self.shutdown = Shutdown::EndOfInput;
+                }
+                if self.search.as_ref().is_some_and(|search| search.infinite) {
+                    self.stop_search();
                 }
             }
             Event::SearchOutput(line) => writeln!(output, "{line}")?,
@@ -204,20 +205,26 @@ impl Engine {
             }
         }
         self.finish_search(output)?;
-        if self.quit {
-            self.deferred.clear();
-        }
         while self.search.is_none()
+            && self.shutdown != Shutdown::Quit
             && let Some(line) = self.deferred.pop_front()
         {
             self.execute(&line, output)?;
             self.finish_search(output)?;
         }
-        Ok(if self.exiting && self.search.is_none() {
+        Ok(if self.shutdown != Shutdown::No && self.search.is_none() {
             ControlFlow::Break(())
         } else {
             ControlFlow::Continue(())
         })
+    }
+
+    /// Tells the running search, if any, to stop and to write its `bestmove`.
+    fn stop_search(&mut self) {
+        if let Some(search) = &mut self.search {
+            search.stop_received = true;
+            self.stop.raise();
+        }
     }
 
     /// Ends the running search if it has finished and may end, writing its `bestmove`.
@@ -273,7 +280,13 @@ impl Engine {
                 Ok(Go::Perft(depth)) => {
                     write_split_perft(output, self.game.board(), notation, depth)?;
                 }
-                Ok(Go::Search(request)) => self.start_search(&request)?,
+                Ok(Go::Search(request)) => {
+                    let side = self.game.board().side_to_move();
+                    match request.limits(side, self.options.move_overhead) {
+                        Ok(limits) => self.start_search(limits, request.infinite)?,
+                        Err(err) => writeln!(output, "info string invalid go: {err}")?,
+                    }
+                }
                 Err(err) => writeln!(output, "info string invalid go: {err}")?,
             },
             Some("d") => write_board(output, self.game.board(), self.options.mode)?,
@@ -282,21 +295,18 @@ impl Engine {
                 "Evaluation: {} (white side)",
                 eval::evaluate_white(self.game.board())
             )?,
-            Some("quit") => {
-                self.exiting = true;
-                self.quit = true;
-            }
+            Some("quit") => self.shutdown = Shutdown::Quit,
             Some(_) => writeln!(output, "info string unknown command: {}", line.trim())?,
         }
         Ok(())
     }
 
-    /// Starts searching the current position on a new thread, as `request` asks.
-    fn start_search(&mut self, request: &SearchRequest) -> io::Result<()> {
+    /// Starts searching the current position on a new thread within `limits`. An
+    /// `infinite` search holds its `bestmove` until `stop`.
+    fn start_search(&mut self, limits: Limits, infinite: bool) -> io::Result<()> {
         self.stop.lower();
         let worker = Arc::clone(&self.worker);
         let game = self.game.clone();
-        let limits = request.limits(self.game.board().side_to_move(), self.options.move_overhead);
         let notation = self.options.mode.castling_notation();
         let events = self.events.clone();
         let thread = thread::Builder::new()
@@ -316,7 +326,7 @@ impl Engine {
             })?;
         self.search = Some(Search {
             thread,
-            infinite: request.infinite,
+            infinite,
             stop_received: false,
             bestmove: None,
         });
