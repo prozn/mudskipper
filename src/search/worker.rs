@@ -5,12 +5,18 @@ use std::time::{Duration, Instant};
 use super::MAX_PLY;
 use super::ordering::OrderedMoves;
 use super::score::{self, DRAW, INFINITY, Score};
-use crate::chess::{Board, KeyHistory, Move};
+use super::stop::StopFlag;
+use super::time::TimeLimit;
+use crate::chess::{Board, Game, KeyHistory, Move};
 use crate::eval;
 
 /// Deepest iteration the search runs, leaving room in the principal variation table for
 /// the ply below it.
 const MAX_DEPTH: u32 = MAX_PLY as u32 - 1;
+
+/// Nodes searched between checks of the stop flag and the clock, so that a stop takes
+/// effect within about a millisecond without the cost of checking at every node.
+const CHECK_INTERVAL: u64 = 1024;
 
 /// When a search stops. A search with no limits runs to the deepest supported depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -19,6 +25,8 @@ pub struct Limits {
     pub depth: Option<u32>,
     /// The number of nodes after which to stop, even in the middle of an iteration.
     pub nodes: Option<u64>,
+    /// How long the search may run.
+    pub time: Option<TimeLimit>,
 }
 
 /// Progress of a search, reported after each completed iteration and when it stops.
@@ -39,7 +47,7 @@ pub struct Report<'pv> {
 }
 
 /// The state one search thread owns: its principal variation table, node counter and the
-/// keys of the positions leading to the one it is searching.
+/// keys of the positions leading to the one it is searching, plus the flag that stops it.
 #[derive(Debug)]
 pub struct Worker {
     pv: PvTable,
@@ -50,13 +58,19 @@ pub struct Worker {
     nodes: u64,
     seldepth: usize,
     limits: Limits,
+    /// When the search started.
+    start: Instant,
+    stop: StopFlag,
+    /// Whether the stop flag and the time limit may end the search, which they may once
+    /// an iteration has completed and there is a searched move to return.
+    interruptible: bool,
     stopped: bool,
 }
 
 impl Worker {
-    /// Returns a worker ready to search.
+    /// Returns a worker ready to search, which stops when `stop` is raised.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(stop: StopFlag) -> Self {
         Self {
             pv: PvTable::new(),
             history: KeyHistory::new(),
@@ -64,30 +78,36 @@ impl Worker {
             nodes: 0,
             seldepth: 0,
             limits: Limits::default(),
+            start: Instant::now(),
+            stop,
+            interruptible: false,
             stopped: false,
         }
     }
 
-    /// Searches `board`, reached after the positions in `history`, until `limits` say to
-    /// stop, and returns the best move, or `None` if there are no legal moves.
+    /// Searches the current position of `game` until `limits` say to stop, and returns the
+    /// best move, or `None` if there are no legal moves.
     ///
     /// The search deepens one ply at a time and calls `report` after each completed
-    /// iteration, and once more if a node limit cuts an iteration short. A depth limit of
-    /// 0 is treated as 1, so that there is always a searched move to report.
+    /// iteration, and once more if a node limit, the time limit or the stop flag cuts an
+    /// iteration short. A depth limit of 0 is treated as 1, so that there is always a
+    /// searched move to report. For the same reason the time limit and the stop flag are
+    /// ignored until the first iteration completes.
     pub fn search(
         &mut self,
-        board: &Board,
-        history: &KeyHistory,
+        game: &Game,
         limits: Limits,
         mut report: impl FnMut(&Report<'_>),
     ) -> Option<Move> {
-        let start = Instant::now();
+        self.start = Instant::now();
+        let board = game.board();
         let mut best_move = *board.legal_moves().first()?;
-        self.history.clone_from(history);
+        self.history.clone_from(game.history());
         self.tree = KeyHistory::new();
         self.nodes = 0;
         self.seldepth = 0;
         self.limits = limits;
+        self.interruptible = false;
         self.stopped = false;
 
         let max_depth = limits
@@ -95,6 +115,9 @@ impl Worker {
             .map_or(MAX_DEPTH, |depth| depth.clamp(1, MAX_DEPTH));
         let mut completed: Option<Iteration> = None;
         for depth in 1..=max_depth {
+            if self.interruptible && (self.stop.is_raised() || self.soft_time_is_up()) {
+                break;
+            }
             let score = self.negamax(board, depth, 0, -INFINITY, INFINITY);
             if self.stopped {
                 break;
@@ -106,13 +129,14 @@ impl Worker {
                 pv: self.pv.line(0).to_vec(),
             };
             best_move = iteration.pv[0];
-            report(&iteration.report(self.nodes, start.elapsed()));
+            report(&iteration.report(self.nodes, self.start.elapsed()));
             completed = Some(iteration);
+            self.interruptible = true;
         }
         if self.stopped
             && let Some(iteration) = &completed
         {
-            report(&iteration.report(self.nodes, start.elapsed()));
+            report(&iteration.report(self.nodes, self.start.elapsed()));
         }
         Some(best_move)
     }
@@ -229,12 +253,31 @@ impl Worker {
         best
     }
 
-    /// Reports whether the limits say the search must stop, and if so marks it stopped.
+    /// Reports whether the limits or the stop flag say the search must stop, and if so
+    /// marks it stopped.
     fn should_stop(&mut self) -> bool {
-        if self.limits.nodes.is_some_and(|limit| self.nodes >= limit) {
+        if self.limits.nodes.is_some_and(|limit| self.nodes >= limit)
+            || (self.interruptible
+                && self.nodes.is_multiple_of(CHECK_INTERVAL)
+                && (self.stop.is_raised() || self.hard_time_is_up()))
+        {
             self.stopped = true;
         }
         self.stopped
+    }
+
+    /// Reports whether the time limit says to start no new iteration.
+    fn soft_time_is_up(&self) -> bool {
+        self.limits
+            .time
+            .is_some_and(|time| self.start.elapsed() >= time.soft)
+    }
+
+    /// Reports whether the time limit says to stop at once.
+    fn hard_time_is_up(&self) -> bool {
+        self.limits
+            .time
+            .is_some_and(|time| self.start.elapsed() >= time.hard)
     }
 
     /// Counts a node searched at `ply`.
@@ -289,12 +332,6 @@ impl Iteration {
             elapsed,
             pv: &self.pv,
         }
-    }
-}
-
-impl Default for Worker {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

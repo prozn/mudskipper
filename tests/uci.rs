@@ -2,6 +2,8 @@
 
 mod common;
 
+use std::time::{Duration, Instant};
+
 use common::{Engine, Reply};
 
 #[test]
@@ -258,6 +260,45 @@ fn uci_lists_the_uci_chess960_option() {
     );
 }
 
+#[test]
+fn uci_lists_every_option_with_its_type_and_default() {
+    let mut engine = Engine::start();
+    engine.send("uci");
+    let before = engine.expect_line("uciok");
+    for option in [
+        "option name Hash type spin default 16 min 1 max 65536",
+        "option name Threads type spin default 1 min 1 max 1024",
+        "option name Move Overhead type spin default 10 min 0 max 5000",
+        "option name Clear Hash type button",
+    ] {
+        assert!(
+            before.iter().any(|l| l == option),
+            "missing {option:?} in {before:?}"
+        );
+    }
+}
+
+#[test]
+fn setoption_accepts_every_option_silently() {
+    let mut engine = Engine::start();
+    for command in [
+        "setoption name Hash value 64",
+        "setoption name hash value 1",
+        "setoption name Threads value 4",
+        "setoption name Move Overhead value 100",
+        "setoption name move overhead value 0",
+        "setoption name Clear Hash",
+    ] {
+        engine.send(command);
+        engine.send("isready");
+        let before = engine.expect_line("readyok");
+        assert!(
+            before.is_empty(),
+            "{command:?} was answered with {before:?}"
+        );
+    }
+}
+
 /// Sends `go perft 1` and returns the moves it lists.
 fn perft_moves(engine: &mut Engine) -> Vec<String> {
     engine.send("go perft 1");
@@ -327,9 +368,15 @@ fn malformed_setoption_commands_get_info_strings() {
     let mut engine = Engine::start();
     for command in [
         "setoption",
-        "setoption name Hash value 16",
+        "setoption name Ponder value true",
         "setoption name UCI_Chess960 value maybe",
         "setoption name UCI_Chess960",
+        "setoption name Hash value 0",
+        "setoption name Hash value lots",
+        "setoption name Threads value 1025",
+        "setoption name Move Overhead value -1",
+        "setoption name Move Overhead",
+        "setoption name Clear Hash value now",
     ] {
         engine.send(command);
         let reply = engine.expect_info_string();
@@ -620,4 +667,181 @@ fn go_depth_does_not_score_a_twofold_repetition_of_the_game_as_a_draw() {
         .and_then(|cp| cp.parse().ok())
         .unwrap_or_else(|| panic!("expected a centipawn score, got {score:?}"));
     assert!(cp < -500, "White is a queen down but scored {cp}");
+}
+
+/// Starts an infinite search, waits until it has reported its first iteration, and returns
+/// the legal moves of the position.
+fn start_infinite_search(engine: &mut Engine, position: &str) -> Vec<String> {
+    engine.send(&format!("position {position}"));
+    let legal = perft_moves(engine);
+    engine.send("go infinite");
+    engine.read_line_matching("an info depth line", |line| line.starts_with("info depth "));
+    legal
+}
+
+#[test]
+fn go_infinite_then_stop_returns_a_legal_bestmove_promptly() {
+    let mut engine = Engine::start();
+    let legal = start_infinite_search(&mut engine, "startpos");
+    let sent = Instant::now();
+    engine.send("stop");
+    let reply = engine.read_line_matching("a bestmove line", |line| line.starts_with("bestmove "));
+    let elapsed = sent.elapsed();
+    let best = best_move(&reply);
+    assert!(
+        legal.iter().any(|mv| mv == best),
+        "bestmove {best} is not legal"
+    );
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "bestmove took {elapsed:?} after stop"
+    );
+    engine.send("isready");
+    engine.expect_line("readyok");
+}
+
+#[test]
+fn go_infinite_waits_for_stop_even_when_the_search_ends_early() {
+    // Bare kings are drawn after any move and White has only Kh2, so the search reaches
+    // its deepest depth almost at once.
+    let mut engine = Engine::start();
+    let legal = start_infinite_search(&mut engine, "fen 8/8/8/8/8/8/5k2/7K w - - 0 1");
+    let quiet = engine.lines_for(Duration::from_millis(200));
+    assert!(
+        !quiet.iter().any(|line| line.starts_with("bestmove")),
+        "bestmove before stop: {quiet:?}"
+    );
+    engine.send("stop");
+    let reply = engine.read_line_matching("a bestmove line", |line| line.starts_with("bestmove "));
+    assert_eq!(legal, [best_move(&reply)]);
+}
+
+#[test]
+fn isready_during_go_infinite_returns_readyok_without_ending_the_search() {
+    let mut engine = Engine::start();
+    start_infinite_search(&mut engine, "startpos");
+    engine.send("isready");
+    let before = engine.expect_line("readyok");
+    let after = engine.lines_for(Duration::from_millis(200));
+    assert!(
+        !before
+            .iter()
+            .chain(&after)
+            .any(|line| line.starts_with("bestmove")),
+        "isready ended the search: {before:?} then {after:?}"
+    );
+    engine.send("stop");
+    engine.read_line_matching("a bestmove line", |line| line.starts_with("bestmove "));
+}
+
+#[test]
+fn commands_sent_during_a_search_run_after_its_bestmove() {
+    let mut engine = Engine::start();
+    start_infinite_search(&mut engine, "startpos");
+    engine.send("position startpos moves e2e4");
+    engine.send("d");
+    engine.send("stop");
+    let reply = engine.read_line_matching("a Fen line", |line| line.starts_with("Fen: "));
+    assert!(
+        reply
+            .before
+            .iter()
+            .any(|line| line.starts_with("bestmove ")),
+        "d ran before the search ended: {:?}",
+        reply.before
+    );
+    assert_eq!(
+        reply.line,
+        "Fen: rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+    );
+}
+
+#[test]
+fn quit_during_a_search_exits_cleanly() {
+    let mut engine = Engine::start();
+    start_infinite_search(&mut engine, "startpos");
+    engine.send("quit");
+    let status = engine.wait_exit();
+    assert!(status.success(), "engine exited with {status}");
+}
+
+/// Sends `go` with `limits` and returns the `bestmove` reply and how long it took.
+fn timed_search(engine: &mut Engine, limits: &str) -> (Reply, Duration) {
+    let sent = Instant::now();
+    let reply = search(engine, limits);
+    (reply, sent.elapsed())
+}
+
+#[test]
+fn go_movetime_returns_a_legal_bestmove_close_to_the_time_given() {
+    let mut engine = Engine::start();
+    let legal = perft_moves(&mut engine);
+    let (reply, elapsed) = timed_search(&mut engine, "movetime 200");
+    let best = best_move(&reply);
+    assert!(
+        legal.iter().any(|mv| mv == best),
+        "bestmove {best} is not legal"
+    );
+    assert!(
+        (Duration::from_millis(150)..Duration::from_millis(250)).contains(&elapsed),
+        "go movetime 200 took {elapsed:?}"
+    );
+}
+
+#[test]
+fn go_with_little_clock_time_never_exceeds_the_time_left_minus_move_overhead() {
+    let mut engine = Engine::start();
+    engine.send("setoption name Move Overhead value 100");
+    // The side to move has 500 ms left, so the reply must come within 400 ms. The other
+    // side's ample time must not be used.
+    for (position, clock) in [
+        ("startpos", "wtime 500 btime 60000"),
+        ("startpos moves e2e4", "wtime 60000 btime 500 winc 0 binc 0"),
+        (
+            "startpos",
+            "wtime 500 btime 500 winc 100 binc 100 movestogo 1",
+        ),
+    ] {
+        engine.send(&format!("position {position}"));
+        let legal = perft_moves(&mut engine);
+        let (reply, elapsed) = timed_search(&mut engine, clock);
+        let best = best_move(&reply);
+        assert!(
+            legal.iter().any(|mv| mv == best),
+            "bestmove {best} is not legal after {position}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "go {clock} after {position} took {elapsed:?}"
+        );
+    }
+}
+
+#[test]
+fn malformed_clock_parameters_get_info_strings() {
+    let mut engine = Engine::start();
+    for command in [
+        "go wtime",
+        "go wtime -1",
+        "go btime 1000 binc x",
+        "go movestogo 0",
+    ] {
+        engine.send(command);
+        let reply = engine.expect_info_string();
+        assert!(
+            reply.contains("invalid go"),
+            "{command:?} should be reported as a bad go command: {reply:?}"
+        );
+    }
+}
+
+#[test]
+fn ucinewgame_resets_to_the_start_position() {
+    let mut engine = Engine::start();
+    engine.send("position startpos moves e2e4 e7e5");
+    engine.send("ucinewgame");
+    assert_eq!(
+        reported_fen(&mut engine),
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    );
 }

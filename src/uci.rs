@@ -1,23 +1,28 @@
 //! The Universal Chess Interface protocol layer.
 
-use std::fmt;
-use std::io::{self, BufRead, Write};
-use std::str::FromStr;
+mod go;
+mod options;
 
-use crate::chess::{
-    Board, CastlingNotation, KeyHistory, ParseFenError, ParseMoveError, Piece, Square,
-};
+use std::collections::VecDeque;
+use std::fmt::{self, Write as _};
+use std::io::{self, BufRead, Write};
+use std::ops::ControlFlow;
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+
+use crate::chess::{Board, CastlingNotation, Game, ParseFenError, ParseMoveError, Piece, Square};
 use crate::eval;
-use crate::search::{Limits, Report, Score, Worker};
+use crate::search::{Report, Score, StopFlag, Worker};
+
+use go::{Go, SearchRequest, parse_go};
+use options::Options;
 
 /// Engine name reported in reply to `uci`.
 const NAME: &str = concat!("Mudskipper ", env!("CARGO_PKG_VERSION"));
 
 /// Author reported in reply to `uci`.
 const AUTHOR: &str = "Prozn";
-
-/// Name of the check option that switches Chess960 mode on and off.
-const CHESS960_OPTION: &str = "UCI_Chess960";
 
 /// Whether the `UCI_Chess960` option is on, which decides how castling moves and FENs are
 /// written.
@@ -50,83 +55,283 @@ impl Mode {
 
 /// Runs the UCI loop, reading commands from `input` and writing replies to `output`.
 ///
-/// The engine starts in the standard start position with `UCI_Chess960` off. The loop
-/// ends on `quit` or end of input. Lines it cannot act on are answered with an
-/// `info string` and otherwise ignored.
+/// The engine starts in the standard start position with `UCI_Chess960` off. `input` is
+/// read on its own thread and searches run on another, so that `stop` and `isready` are
+/// answered during a search. Other commands that arrive during a search wait until it
+/// ends. The loop ends on `quit`, which stops any search first, or at the end of input,
+/// once the current search has finished; an infinite search is stopped. Lines the loop
+/// cannot act on are answered with an `info string` and otherwise ignored.
 ///
 /// # Errors
 ///
-/// Returns any I/O error from reading `input` or writing `output`.
-pub fn run(mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
-    let mut board = Board::startpos();
-    let mut history = KeyHistory::new();
-    let mut worker = Worker::new();
-    let mut mode = Mode::Standard;
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        if input.read_until(b'\n', &mut buf)? == 0 {
+/// Returns any I/O error from reading `input`, writing `output` or starting a thread.
+pub fn run(input: impl BufRead + Send + 'static, mut output: impl Write) -> io::Result<()> {
+    let (events, received) = mpsc::channel();
+    spawn_input_thread(input, events.clone())?;
+    let mut engine = Engine::new(events);
+    for event in received {
+        if engine.handle(event, &mut output)?.is_break() {
             break;
         }
-        let Ok(line) = str::from_utf8(&buf) else {
-            writeln!(output, "info string ignoring line that is not valid UTF-8")?;
-            output.flush()?;
-            continue;
+        output.flush()?;
+    }
+    output.flush()
+}
+
+/// Something the UCI loop reacts to.
+#[derive(Debug)]
+enum Event {
+    /// A line read from input, including its line ending and not yet decoded.
+    Line(Vec<u8>),
+    /// Input ended, normally or with an error.
+    InputEnd(io::Result<()>),
+    /// A line of search output, such as an `info` line.
+    SearchOutput(String),
+    /// The search finished with this `bestmove` line, to write once the search may end.
+    SearchDone(String),
+}
+
+/// Reads `input` line by line on a new thread, sending each line to `events`.
+fn spawn_input_thread(
+    mut input: impl BufRead + Send + 'static,
+    events: Sender<Event>,
+) -> io::Result<()> {
+    thread::Builder::new()
+        .name("input".to_owned())
+        .spawn(move || {
+            loop {
+                let mut line = Vec::new();
+                let event = match input.read_until(b'\n', &mut line) {
+                    Ok(0) => Event::InputEnd(Ok(())),
+                    Ok(_) => Event::Line(line),
+                    Err(err) => Event::InputEnd(Err(err)),
+                };
+                let last = matches!(event, Event::InputEnd(_));
+                // A send fails only once the loop has ended, and then nobody is listening.
+                if events.send(event).is_err() || last {
+                    break;
+                }
+            }
+        })?;
+    Ok(())
+}
+
+/// A search running on its own thread.
+#[derive(Debug)]
+struct Search {
+    thread: JoinHandle<()>,
+    /// Whether the `bestmove` must wait for `stop`.
+    infinite: bool,
+    /// Whether `stop` or `quit` has been received.
+    stop_received: bool,
+    /// The search's `bestmove` line, once it finished, while it waits for `stop`.
+    bestmove: Option<String>,
+}
+
+/// The state of the UCI loop.
+#[derive(Debug)]
+struct Engine {
+    game: Game,
+    options: Options,
+    /// The worker that runs every search. The search thread holds its lock while it
+    /// searches, and the loop touches it only when no search is running.
+    worker: Arc<Mutex<Worker>>,
+    /// The running search, if any.
+    search: Option<Search>,
+    stop: StopFlag,
+    /// Where the search thread sends its output.
+    events: Sender<Event>,
+    /// Commands received during the search, to run once it ends.
+    deferred: VecDeque<Vec<u8>>,
+    /// Whether to exit once no search is running: `quit` was received or input ended.
+    exiting: bool,
+    /// Whether `quit` was received, so commands still waiting should be dropped.
+    quit: bool,
+}
+
+impl Engine {
+    /// Returns an engine in the start position, idle, sending search output to `events`.
+    fn new(events: Sender<Event>) -> Self {
+        let stop = StopFlag::new();
+        Self {
+            game: Game::startpos(),
+            options: Options::new(),
+            worker: Arc::new(Mutex::new(Worker::new(stop.clone()))),
+            search: None,
+            stop,
+            events,
+            deferred: VecDeque::new(),
+            exiting: false,
+            quit: false,
+        }
+    }
+
+    /// Reacts to `event`, and says whether the loop should end.
+    fn handle(&mut self, event: Event, output: &mut impl Write) -> io::Result<ControlFlow<()>> {
+        match event {
+            Event::Line(line) => match &mut self.search {
+                None => self.execute(&line, output)?,
+                Some(search) => match first_word(&line) {
+                    Some("stop") => {
+                        search.stop_received = true;
+                        self.stop.raise();
+                    }
+                    Some("isready") => writeln!(output, "readyok")?,
+                    Some("quit") => {
+                        search.stop_received = true;
+                        self.stop.raise();
+                        self.exiting = true;
+                        self.quit = true;
+                    }
+                    _ => self.deferred.push_back(line),
+                },
+            },
+            Event::InputEnd(result) => {
+                result?;
+                self.exiting = true;
+                if let Some(search) = &mut self.search
+                    && search.infinite
+                {
+                    search.stop_received = true;
+                    self.stop.raise();
+                }
+            }
+            Event::SearchOutput(line) => writeln!(output, "{line}")?,
+            Event::SearchDone(bestmove) => {
+                if let Some(search) = &mut self.search {
+                    search.bestmove = Some(bestmove);
+                }
+            }
+        }
+        self.finish_search(output)?;
+        if self.quit {
+            self.deferred.clear();
+        }
+        while self.search.is_none()
+            && let Some(line) = self.deferred.pop_front()
+        {
+            self.execute(&line, output)?;
+            self.finish_search(output)?;
+        }
+        Ok(if self.exiting && self.search.is_none() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        })
+    }
+
+    /// Ends the running search if it has finished and may end, writing its `bestmove`.
+    fn finish_search(&mut self, output: &mut impl Write) -> io::Result<()> {
+        let Some(search) = &mut self.search else {
+            return Ok(());
         };
-        match line.split_whitespace().next() {
-            None => {}
+        if search.infinite && !search.stop_received {
+            return Ok(());
+        }
+        let Some(bestmove) = search.bestmove.take() else {
+            return Ok(());
+        };
+        if let Some(search) = self.search.take() {
+            // The thread has sent its last event, so it ends at once and cannot have
+            // panicked.
+            let _ = search.thread.join();
+        }
+        writeln!(output, "{bestmove}")
+    }
+
+    /// Carries out the command on `line` while no search is running.
+    fn execute(&mut self, line: &[u8], output: &mut impl Write) -> io::Result<()> {
+        let Ok(line) = str::from_utf8(line) else {
+            return writeln!(output, "info string ignoring line that is not valid UTF-8");
+        };
+        let notation = self.options.mode.castling_notation();
+        match first_word(line.as_bytes()) {
+            // A `stop` with no search to stop needs no reply.
+            None | Some("stop") => {}
             Some("uci") => {
                 writeln!(output, "id name {NAME}")?;
                 writeln!(output, "id author {AUTHOR}")?;
-                writeln!(
-                    output,
-                    "option name {CHESS960_OPTION} type check default false"
-                )?;
+                Options::write_uci(output)?;
                 writeln!(output, "uciok")?;
             }
             Some("isready") => writeln!(output, "readyok")?,
-            Some("setoption") => match parse_setoption(line) {
-                Ok(new_mode) => mode = new_mode,
-                Err(err) => writeln!(output, "info string invalid setoption: {err}")?,
-            },
-            Some("position") => match parse_position(line, mode.castling_notation()) {
-                Ok((new_board, new_history)) => (board, history) = (new_board, new_history),
+            Some("ucinewgame") => {
+                // A fresh worker forgets whatever earlier searches taught it.
+                self.game = Game::startpos();
+                *self.worker.lock().expect("worker lock poisoned") = Worker::new(self.stop.clone());
+            }
+            Some("setoption") => {
+                if let Err(err) = self.options.set(line) {
+                    writeln!(output, "info string invalid setoption: {err}")?;
+                }
+            }
+            Some("position") => match parse_position(line, notation) {
+                Ok(game) => self.game = game,
                 Err(err) => writeln!(output, "info string invalid position: {err}")?,
             },
             Some("go") => match parse_go(line) {
                 Ok(Go::Perft(depth)) => {
-                    write_split_perft(&mut output, &board, mode.castling_notation(), depth)?;
+                    write_split_perft(output, self.game.board(), notation, depth)?;
                 }
-                Ok(Go::Search(limits)) => go(
-                    &mut output,
-                    &mut worker,
-                    &board,
-                    &history,
-                    limits,
-                    mode.castling_notation(),
-                )?,
+                Ok(Go::Search(request)) => self.start_search(&request)?,
                 Err(err) => writeln!(output, "info string invalid go: {err}")?,
             },
-            Some("d") => write_board(&mut output, &board, mode)?,
+            Some("d") => write_board(output, self.game.board(), self.options.mode)?,
             Some("eval") => writeln!(
                 output,
                 "Evaluation: {} (white side)",
-                eval::evaluate_white(&board)
+                eval::evaluate_white(self.game.board())
             )?,
-            Some("quit") => break,
+            Some("quit") => {
+                self.exiting = true;
+                self.quit = true;
+            }
             Some(_) => writeln!(output, "info string unknown command: {}", line.trim())?,
         }
-        output.flush()?;
+        Ok(())
     }
-    Ok(())
+
+    /// Starts searching the current position on a new thread, as `request` asks.
+    fn start_search(&mut self, request: &SearchRequest) -> io::Result<()> {
+        self.stop.lower();
+        let worker = Arc::clone(&self.worker);
+        let game = self.game.clone();
+        let limits = request.limits(self.game.board().side_to_move(), self.options.move_overhead);
+        let notation = self.options.mode.castling_notation();
+        let events = self.events.clone();
+        let thread = thread::Builder::new()
+            .name("search".to_owned())
+            .spawn(move || {
+                let mut worker = worker.lock().expect("worker lock poisoned");
+                // A send fails only once the loop has ended, and then nobody is listening.
+                let best = worker.search(&game, limits, |report| {
+                    let _ = events.send(Event::SearchOutput(info_line(report, notation)));
+                });
+                drop(worker);
+                let bestmove = match best {
+                    Some(mv) => format!("bestmove {}", mv.display(notation)),
+                    None => "bestmove 0000".to_owned(),
+                };
+                let _ = events.send(Event::SearchDone(bestmove));
+            })?;
+        self.search = Some(Search {
+            thread,
+            infinite: request.infinite,
+            stop_received: false,
+            bestmove: None,
+        });
+        Ok(())
+    }
 }
 
-/// Parses a `position` command into the board it sets up and the keys of the positions
-/// played before it, reading castling moves as `notation` says.
-fn parse_position(
-    line: &str,
-    notation: CastlingNotation,
-) -> Result<(Board, KeyHistory), PositionError> {
+/// The first word of `line`, if it is valid UTF-8 and not blank.
+fn first_word(line: &[u8]) -> Option<&str> {
+    str::from_utf8(line).ok()?.split_whitespace().next()
+}
+
+/// Parses a `position` command into the game it sets up, reading castling moves as
+/// `notation` says.
+fn parse_position(line: &str, notation: CastlingNotation) -> Result<Game, PositionError> {
     let args: Vec<&str> = line.split_whitespace().skip(1).collect();
     let (setup, moves) = match args.iter().position(|&arg| arg == "moves") {
         Some(i) => (&args[..i], &args[i + 1..]),
@@ -139,146 +344,36 @@ fn parse_position(
         ["fen", fen @ ..] => Board::from_fen(&fen.join(" ")).map_err(PositionError::Fen)?,
         [other, ..] => return Err(PositionError::UnknownSetup((*other).to_owned())),
     };
-    let mut history = KeyHistory::new();
-    let board = moves.iter().try_fold(board, |board, text| {
-        let mv = board
+    let mut game = Game::new(board);
+    for text in moves {
+        let mv = game
+            .board()
             .parse_move(text, notation)
             .map_err(PositionError::Move)?;
-        history.push(board.key());
-        Ok(board.make(mv))
-    })?;
-    Ok((board, history))
-}
-
-/// What a `go` command asks for.
-#[derive(Debug)]
-enum Go {
-    /// `go perft <depth>`: count the leaf nodes below each legal move.
-    Perft(u32),
-    /// Search for the best move within these limits.
-    Search(Limits),
-}
-
-/// Parses a `go` command.
-///
-/// Only `go perft <depth>` and searches limited by `depth` and `nodes` are supported so
-/// far.
-fn parse_go(line: &str) -> Result<Go, GoError> {
-    let args: Vec<&str> = line.split_whitespace().skip(1).collect();
-    if let ["perft", rest @ ..] = args.as_slice() {
-        return match rest {
-            [depth] => depth
-                .parse()
-                .map(Go::Perft)
-                .map_err(|_| GoError::InvalidValue {
-                    parameter: "perft depth",
-                    value: (*depth).to_owned(),
-                }),
-            _ => Err(GoError::MalformedPerft),
-        };
+        game.play(mv);
     }
-    let mut limits = Limits::default();
-    let mut args = args.into_iter();
-    while let Some(name) = args.next() {
-        let value = args.next().unwrap_or_default();
-        match name {
-            "depth" => limits.depth = Some(parse_count("depth", value)?),
-            "nodes" => limits.nodes = Some(parse_count("nodes", value)?),
-            other => return Err(GoError::Unsupported(other.to_owned())),
-        }
-    }
-    if limits == Limits::default() {
-        return Err(GoError::MissingLimit);
-    }
-    Ok(Go::Search(limits))
+    Ok(game)
 }
 
-/// Parses `value`, the value given for the `go` parameter `parameter`, as a count.
-fn parse_count<T: FromStr>(parameter: &'static str, value: &str) -> Result<T, GoError> {
-    value.parse().map_err(|_| GoError::InvalidValue {
-        parameter,
-        value: value.to_owned(),
-    })
-}
-
-/// Why a `go` command was rejected.
-#[derive(Debug)]
-enum GoError {
-    /// `perft` was not followed by exactly one depth.
-    MalformedPerft,
-    /// A parameter's value was missing or not a valid count.
-    InvalidValue {
-        /// The parameter whose value was rejected.
-        parameter: &'static str,
-        /// The value given, or an empty string if there was none.
-        value: String,
-    },
-    /// The parameter is not supported yet.
-    Unsupported(String),
-    /// No limit was given, and the search could not be stopped.
-    MissingLimit,
-}
-
-impl fmt::Display for GoError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MalformedPerft => f.write_str("expected go perft <depth>"),
-            Self::InvalidValue { parameter, value } => {
-                write!(f, "invalid {parameter} {value:?}")
-            }
-            Self::Unsupported(name) => write!(f, "unsupported parameter {name:?}"),
-            Self::MissingLimit => f.write_str("expected depth or nodes"),
-        }
-    }
-}
-
-/// Searches `board`, reached after the positions in `history`, writing an `info` line
-/// for each report and then the `bestmove`.
-fn go(
-    output: &mut impl Write,
-    worker: &mut Worker,
-    board: &Board,
-    history: &KeyHistory,
-    limits: Limits,
-    notation: CastlingNotation,
-) -> io::Result<()> {
-    let mut result = Ok(());
-    let best = worker.search(board, history, limits, |report| {
-        if result.is_ok() {
-            result = write_info(output, report, notation);
-        }
-    });
-    result?;
-    match best {
-        Some(mv) => writeln!(output, "bestmove {}", mv.display(notation)),
-        None => writeln!(output, "bestmove 0000"),
-    }
-}
-
-/// Writes a search report as an `info` line.
-fn write_info(
-    output: &mut impl Write,
-    report: &Report<'_>,
-    notation: CastlingNotation,
-) -> io::Result<()> {
+/// Formats a search report as an `info` line.
+fn info_line(report: &Report<'_>, notation: CastlingNotation) -> String {
     let micros = report.elapsed.as_micros().max(1);
     let nps = u128::from(report.nodes) * 1_000_000 / micros;
     let score = match report.score {
         Score::Centipawns(cp) => format!("cp {cp}"),
         Score::Mate(moves) => format!("mate {moves}"),
     };
-    write!(
-        output,
+    let mut line = format!(
         "info depth {} seldepth {} score {score} nodes {} nps {nps} time {} hashfull 0 pv",
         report.depth,
         report.seldepth,
         report.nodes,
         report.elapsed.as_millis(),
-    )?;
+    );
     for mv in report.pv {
-        write!(output, " {}", mv.display(notation))?;
+        write!(line, " {}", mv.display(notation)).expect("writing to a String cannot fail");
     }
-    writeln!(output)
+    line
 }
 
 /// Writes the reply to `go perft`: the count below each legal move, then the total.
@@ -300,54 +395,6 @@ fn write_split_perft(
     };
     writeln!(output)?;
     writeln!(output, "Nodes searched: {total}")
-}
-
-/// Parses a `setoption` command into the mode it selects.
-///
-/// `UCI_Chess960` is the only option so far. Option names are matched ignoring case, as
-/// the UCI protocol asks.
-fn parse_setoption(line: &str) -> Result<Mode, SetOptionError> {
-    let args: Vec<&str> = line.split_whitespace().skip(1).collect();
-    let Some((&"name", rest)) = args.split_first() else {
-        return Err(SetOptionError::MissingName);
-    };
-    let (name, value) = match rest.iter().position(|&arg| arg == "value") {
-        Some(i) => (rest[..i].join(" "), Some(rest[i + 1..].join(" "))),
-        None => (rest.join(" "), None),
-    };
-    if !name.eq_ignore_ascii_case(CHESS960_OPTION) {
-        return Err(SetOptionError::UnknownOption(name));
-    }
-    match value.as_deref() {
-        Some("true") => Ok(Mode::Chess960),
-        Some("false") => Ok(Mode::Standard),
-        Some(value) => Err(SetOptionError::InvalidValue(value.to_owned())),
-        None => Err(SetOptionError::MissingValue),
-    }
-}
-
-/// Why a `setoption` command was rejected.
-#[derive(Debug)]
-enum SetOptionError {
-    /// No `name` followed `setoption`.
-    MissingName,
-    /// The engine has no option of this name.
-    UnknownOption(String),
-    /// The option was given no value.
-    MissingValue,
-    /// The value is not valid for the option.
-    InvalidValue(String),
-}
-
-impl fmt::Display for SetOptionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingName => f.write_str("expected setoption name <name> value <value>"),
-            Self::UnknownOption(name) => write!(f, "unknown option {name:?}"),
-            Self::MissingValue => f.write_str("expected value true or false"),
-            Self::InvalidValue(value) => write!(f, "expected true or false, got {value:?}"),
-        }
-    }
 }
 
 /// Why a `position` command was rejected.
