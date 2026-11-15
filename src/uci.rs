@@ -16,8 +16,9 @@ const CHESS960_OPTION: &str = "UCI_Chess960";
 
 /// Runs the UCI loop, reading commands from `input` and writing replies to `output`.
 ///
-/// The engine starts in the standard start position with `UCI_Chess960` off. The loop ends on `quit` or end of
-/// input. Lines it cannot act on are answered with an `info string` and otherwise ignored.
+/// The engine starts in the standard start position with `UCI_Chess960` off. The loop
+/// ends on `quit` or end of input. Lines it cannot act on are answered with an
+/// `info string` and otherwise ignored.
 ///
 /// # Errors
 ///

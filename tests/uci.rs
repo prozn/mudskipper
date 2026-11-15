@@ -261,10 +261,10 @@ fn uci_lists_the_uci_chess960_option() {
 /// Sends `go perft 1` and returns the moves it lists.
 fn perft_moves(engine: &mut Engine) -> Vec<String> {
     engine.send("go perft 1");
-    let before = engine.read_line_matching("a Nodes searched line", |line| {
+    let reply = engine.read_line_matching("a Nodes searched line", |line| {
         line.starts_with("Nodes searched: ")
     });
-    before
+    reply
         .before
         .iter()
         .filter_map(|line| line.split_once(':').map(|(mv, _)| mv.to_owned()))
@@ -334,7 +334,7 @@ fn malformed_setoption_commands_get_info_strings() {
         engine.send(command);
         let reply = engine.expect_info_string();
         assert!(
-            !reply.contains("unknown command"),
+            reply.contains("invalid setoption"),
             "{command:?} should be reported as a bad setoption command: {reply:?}"
         );
     }

@@ -86,6 +86,11 @@ impl Board {
     /// Finds the legal move written as `text` in UCI notation, with castling written as
     /// `notation` says.
     ///
+    /// In a Chess960 position, [`CastlingNotation::Standard`] can write castling the same
+    /// way as a plain king move, such as `b1c1` with the king on b1 and its rook on a1.
+    /// The plain king move is then found, so read Chess960 games with
+    /// [`CastlingNotation::KingTakesRook`].
+    ///
     /// # Errors
     ///
     /// Returns [`ParseMoveError::Malformed`] if `text` is not UCI move notation, and
