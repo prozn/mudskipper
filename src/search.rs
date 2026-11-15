@@ -5,9 +5,13 @@
 
 mod ordering;
 mod score;
+mod stop;
+mod time;
 mod worker;
 
 pub use score::Score;
+pub use stop::StopFlag;
+pub use time::{Clock, TimeLimit};
 pub use worker::{Limits, Report, Worker};
 
 /// Deepest ply the search reaches, counting quiescence search, and the length of the

@@ -6,10 +6,22 @@ UCI GUI (Cute Chess, Arena, Banksia, En Croissant) or match runner (fastchess,
 cutechess-cli, OpenBench).
 
 It is at an early stage. It sets up positions with `position startpos` or
-`position fen <fen>`, optionally followed by `moves ...`, and searches them with
-`go depth <plies>` or `go nodes <count>`, replying with `info` lines and a `bestmove`. Time
-controls, `go infinite` and `stop` are not supported yet. The search is a plain alpha-beta
-search with quiescence search over a PeSTO-style tapered evaluation.
+`position fen <fen>`, optionally followed by `moves ...`, and searches them with `go`,
+replying with `info` lines and a `bestmove`. `go` accepts `depth`, `nodes`, `movetime`,
+`infinite`, and the clock parameters `wtime`, `btime`, `winc`, `binc` and `movestogo`.
+Commands are read on their own thread, so `stop` and `isready` are answered during a
+search; other commands sent during a search wait until it ends. The search is a plain
+alpha-beta search with quiescence search over a PeSTO-style tapered evaluation.
+
+It offers these UCI options:
+
+| Option | Type | Default | Effect |
+|---|---|---|---|
+| `Hash` | spin, 1 to 65536 | 16 | Transposition table size in MB. Accepted, but there is no transposition table yet. |
+| `Threads` | spin, 1 to 1024 | 1 | Search threads. Accepted, but only one thread is used for now. |
+| `Move Overhead` | spin, 0 to 5000 | 10 | Milliseconds kept back from every move's time, to cover GUI and network lag. |
+| `Clear Hash` | button | | Clears the transposition table, once there is one. |
+| `UCI_Chess960` | check | false | Chess960 castling notation, described below. |
 
 It supports **Chess960**: FENs may use **X-FEN** or **Shredder-FEN** castling rights, and
 with the `UCI_Chess960` option on, castling moves are read and written as the king taking

@@ -105,6 +105,21 @@ impl Engine {
         }
     }
 
+    /// Collects every line printed during the next `duration`, for checking that something
+    /// does not happen.
+    pub fn lines_for(&mut self, duration: Duration) -> Vec<String> {
+        let deadline = Instant::now() + duration;
+        let mut lines = Vec::new();
+        while let Ok(line) = self
+            .lines
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            self.transcript.push(line.clone());
+            lines.push(line);
+        }
+        lines
+    }
+
     /// Reads lines until one equals `expected` exactly, returning the lines before it.
     pub fn expect_line(&mut self, expected: &str) -> Vec<String> {
         self.read_line_matching(&format!("{expected:?}"), |line| line == expected)
