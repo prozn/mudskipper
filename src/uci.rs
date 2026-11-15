@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::io::{self, BufRead, Write};
+use std::str::FromStr;
 
 use crate::chess::{
     Board, CastlingNotation, KeyHistory, ParseFenError, ParseMoveError, Piece, Square,
@@ -169,22 +170,20 @@ fn parse_go(line: &str) -> Result<Go, GoError> {
             [depth] => depth
                 .parse()
                 .map(Go::Perft)
-                .map_err(|_| GoError::InvalidValue("perft depth", (*depth).to_owned())),
+                .map_err(|_| GoError::InvalidValue {
+                    parameter: "perft depth",
+                    value: (*depth).to_owned(),
+                }),
             _ => Err(GoError::MalformedPerft),
         };
     }
     let mut limits = Limits::default();
     let mut args = args.into_iter();
     while let Some(name) = args.next() {
-        let value = args.next();
-        let parse = |field| {
-            value
-                .and_then(|value| value.parse().ok())
-                .ok_or_else(|| GoError::InvalidValue(field, value.unwrap_or_default().to_owned()))
-        };
+        let value = args.next().unwrap_or_default();
         match name {
-            "depth" => limits.depth = Some(parse("depth")?),
-            "nodes" => limits.nodes = Some(parse("nodes")?.into()),
+            "depth" => limits.depth = Some(parse_count("depth", value)?),
+            "nodes" => limits.nodes = Some(parse_count("nodes", value)?),
             other => return Err(GoError::Unsupported(other.to_owned())),
         }
     }
@@ -194,13 +193,26 @@ fn parse_go(line: &str) -> Result<Go, GoError> {
     Ok(Go::Search(limits))
 }
 
+/// Parses `value`, the value given for the `go` parameter `parameter`, as a count.
+fn parse_count<T: FromStr>(parameter: &'static str, value: &str) -> Result<T, GoError> {
+    value.parse().map_err(|_| GoError::InvalidValue {
+        parameter,
+        value: value.to_owned(),
+    })
+}
+
 /// Why a `go` command was rejected.
 #[derive(Debug)]
 enum GoError {
     /// `perft` was not followed by exactly one depth.
     MalformedPerft,
     /// A parameter's value was missing or not a valid count.
-    InvalidValue(&'static str, String),
+    InvalidValue {
+        /// The parameter whose value was rejected.
+        parameter: &'static str,
+        /// The value given, or an empty string if there was none.
+        value: String,
+    },
     /// The parameter is not supported yet.
     Unsupported(String),
     /// No limit was given, and the search could not be stopped.
@@ -211,7 +223,9 @@ impl fmt::Display for GoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MalformedPerft => f.write_str("expected go perft <depth>"),
-            Self::InvalidValue(field, value) => write!(f, "invalid {field} {value:?}"),
+            Self::InvalidValue { parameter, value } => {
+                write!(f, "invalid {parameter} {value:?}")
+            }
             Self::Unsupported(name) => write!(f, "unsupported parameter {name:?}"),
             Self::MissingLimit => f.write_str("expected depth or nodes"),
         }

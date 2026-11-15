@@ -72,7 +72,8 @@ impl Worker {
     /// stop, and returns the best move, or `None` if there are no legal moves.
     ///
     /// The search deepens one ply at a time and calls `report` after each completed
-    /// iteration, and once more if a node limit cuts an iteration short.
+    /// iteration, and once more if a node limit cuts an iteration short. A depth limit of
+    /// 0 is treated as 1, so that there is always a searched move to report.
     pub fn search(
         &mut self,
         board: &Board,
@@ -123,7 +124,11 @@ impl Worker {
         if depth == 0 {
             return self.quiescence(board, ply, alpha, beta);
         }
-        if self.visit(ply) || (ply > 0 && self.is_draw(board)) {
+        if self.should_stop() {
+            return DRAW;
+        }
+        self.count_node(ply);
+        if ply > 0 && self.is_draw(board) {
             return DRAW;
         }
         if ply >= MAX_PLY - 1 {
@@ -171,7 +176,11 @@ impl Worker {
     /// The side to move may stand pat on the static evaluation instead of capturing.
     /// In check it may not, and every evasion is searched so that mates are seen.
     fn quiescence(&mut self, board: &Board, ply: usize, mut alpha: i32, beta: i32) -> i32 {
-        if self.visit(ply) || self.is_draw(board) {
+        if self.should_stop() {
+            return DRAW;
+        }
+        self.count_node(ply);
+        if self.is_draw(board) {
             return DRAW;
         }
         if ply >= MAX_PLY {
@@ -220,15 +229,18 @@ impl Worker {
         best
     }
 
-    /// Counts a node at `ply` and reports whether the search must stop.
-    fn visit(&mut self, ply: usize) -> bool {
+    /// Reports whether the limits say the search must stop, and if so marks it stopped.
+    fn should_stop(&mut self) -> bool {
         if self.limits.nodes.is_some_and(|limit| self.nodes >= limit) {
             self.stopped = true;
-            return true;
         }
+        self.stopped
+    }
+
+    /// Counts a node searched at `ply`.
+    fn count_node(&mut self, ply: usize) {
         self.nodes += 1;
         self.seldepth = self.seldepth.max(ply);
-        false
     }
 
     /// Records that the search is moving on from `board` to one of its children.

@@ -45,6 +45,16 @@ impl Colour {
         }
     }
 
+    /// The sign of scores counted from White's side as seen by this colour: 1 for white,
+    /// -1 for black.
+    #[must_use]
+    pub const fn sign(self) -> i32 {
+        match self {
+            Self::White => 1,
+            Self::Black => -1,
+        }
+    }
+
     /// The absolute rank this colour's pieces start on: 0 for white, 7 for black.
     #[must_use]
     pub const fn back_rank(self) -> u8 {

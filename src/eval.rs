@@ -17,11 +17,7 @@ const PHASE_WEIGHTS: [i32; 6] = [0, 1, 1, 2, 4, 0];
 /// platform.
 #[must_use]
 pub fn evaluate(board: &Board) -> i32 {
-    let white = evaluate_white(board);
-    match board.side_to_move() {
-        Colour::White => white,
-        Colour::Black => -white,
-    }
+    board.side_to_move().sign() * evaluate_white(board)
 }
 
 /// Evaluates `board` in centipawns from White's point of view, whoever is to move.
@@ -31,10 +27,7 @@ pub fn evaluate_white(board: &Board) -> i32 {
     let mut endgame = 0;
     let mut phase = 0;
     for colour in Colour::ALL {
-        let sign = match colour {
-            Colour::White => 1,
-            Colour::Black => -1,
-        };
+        let sign = colour.sign();
         for piece_type in PieceType::ALL {
             for square in board.pieces(colour, piece_type) {
                 let (mg, eg) = pesto::value(colour, piece_type, square);
