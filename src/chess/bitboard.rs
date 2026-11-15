@@ -13,6 +13,9 @@ impl Bitboard {
     /// The empty set.
     pub const EMPTY: Self = Self(0);
 
+    /// The light squares, such as b1 and a2.
+    pub(crate) const LIGHT_SQUARES: Self = Self(0x55AA_55AA_55AA_55AA);
+
     /// Returns the set whose bit `i` is set for each square with index `i` in `bits`.
     pub(crate) const fn from_bits(bits: u64) -> Self {
         Self(bits)

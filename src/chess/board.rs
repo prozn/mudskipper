@@ -1,5 +1,6 @@
 //! The board: piece placement plus the rest of the game state that FEN records.
 
+mod draw;
 mod fen;
 mod make;
 mod movegen;
@@ -11,7 +12,7 @@ use super::bitboard::Bitboard;
 use super::castling::CastlingRights;
 use super::piece::{Colour, EN_PASSANT_CAPTURER_RANK, Piece, PieceType};
 use super::square::Square;
-use super::zobrist;
+use super::zobrist::{self, Key};
 
 /// FEN of the standard start position.
 const STARTPOS_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -91,8 +92,8 @@ impl Board {
     /// The key covers piece placement, side to move, castling rights and the en passant
     /// file when a pawn stands ready to capture en passant, but not the move clocks.
     #[must_use]
-    pub const fn key(&self) -> u64 {
-        self.key
+    pub const fn key(&self) -> Key {
+        Key::new(self.key)
     }
 
     /// Computes the Zobrist key from the rest of the position.

@@ -1,6 +1,6 @@
 //! FEN parsing, printing and Zobrist keys through the `chess` API (Seam 2).
 
-use mudskipper::chess::{Board, Colour, ParseFenError};
+use mudskipper::chess::{Board, Colour, Key, ParseFenError};
 
 const STARTPOS: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -282,7 +282,7 @@ fn non_ascii_fen_is_rejected_without_panicking() {
     );
 }
 
-fn key(fen: &str) -> u64 {
+fn key(fen: &str) -> Key {
     Board::from_fen(fen)
         .unwrap_or_else(|err| panic!("{fen:?} should parse: {err}"))
         .key()
@@ -306,7 +306,7 @@ fn move_clocks_do_not_affect_the_key() {
 
 #[test]
 fn different_positions_have_different_keys() {
-    let mut keys: Vec<(u64, &str)> = POSITIONS.iter().map(|&fen| (key(fen), fen)).collect();
+    let mut keys: Vec<(Key, &str)> = POSITIONS.iter().map(|&fen| (key(fen), fen)).collect();
     keys.extend(
         [
             // Startpos with each component changed in turn.
