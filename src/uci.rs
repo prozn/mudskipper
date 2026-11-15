@@ -3,7 +3,11 @@
 use std::fmt;
 use std::io::{self, BufRead, Write};
 
-use crate::chess::{Board, CastlingNotation, ParseFenError, ParseMoveError, Piece, Square};
+use crate::chess::{
+    Board, CastlingNotation, KeyHistory, ParseFenError, ParseMoveError, Piece, Square,
+};
+use crate::eval;
+use crate::search::{Limits, Report, Score, Worker};
 
 /// Engine name reported in reply to `uci`.
 const NAME: &str = concat!("Mudskipper ", env!("CARGO_PKG_VERSION"));
@@ -54,6 +58,8 @@ impl Mode {
 /// Returns any I/O error from reading `input` or writing `output`.
 pub fn run(mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
     let mut board = Board::startpos();
+    let mut history = KeyHistory::new();
+    let mut worker = Worker::new();
     let mut mode = Mode::Standard;
     let mut buf = Vec::new();
     loop {
@@ -83,11 +89,29 @@ pub fn run(mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
                 Err(err) => writeln!(output, "info string invalid setoption: {err}")?,
             },
             Some("position") => match parse_position(line, mode.castling_notation()) {
-                Ok(new_board) => board = new_board,
+                Ok((new_board, new_history)) => (board, history) = (new_board, new_history),
                 Err(err) => writeln!(output, "info string invalid position: {err}")?,
             },
-            Some("go") => go(&mut output, &board, mode.castling_notation(), line)?,
+            Some("go") => match parse_go(line) {
+                Ok(Go::Perft(depth)) => {
+                    write_split_perft(&mut output, &board, mode.castling_notation(), depth)?;
+                }
+                Ok(Go::Search(limits)) => go(
+                    &mut output,
+                    &mut worker,
+                    &board,
+                    &history,
+                    limits,
+                    mode.castling_notation(),
+                )?,
+                Err(err) => writeln!(output, "info string invalid go: {err}")?,
+            },
             Some("d") => write_board(&mut output, &board, mode)?,
+            Some("eval") => writeln!(
+                output,
+                "Evaluation: {} (white side)",
+                eval::evaluate_white(&board)
+            )?,
             Some("quit") => break,
             Some(_) => writeln!(output, "info string unknown command: {}", line.trim())?,
         }
@@ -96,9 +120,12 @@ pub fn run(mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
     Ok(())
 }
 
-/// Parses a `position` command into the board it sets up, reading castling moves as
-/// `notation` says.
-fn parse_position(line: &str, notation: CastlingNotation) -> Result<Board, PositionError> {
+/// Parses a `position` command into the board it sets up and the keys of the positions
+/// played before it, reading castling moves as `notation` says.
+fn parse_position(
+    line: &str,
+    notation: CastlingNotation,
+) -> Result<(Board, KeyHistory), PositionError> {
     let args: Vec<&str> = line.split_whitespace().skip(1).collect();
     let (setup, moves) = match args.iter().position(|&arg| arg == "moves") {
         Some(i) => (&args[..i], &args[i + 1..]),
@@ -111,34 +138,133 @@ fn parse_position(line: &str, notation: CastlingNotation) -> Result<Board, Posit
         ["fen", fen @ ..] => Board::from_fen(&fen.join(" ")).map_err(PositionError::Fen)?,
         [other, ..] => return Err(PositionError::UnknownSetup((*other).to_owned())),
     };
-    moves.iter().try_fold(board, |board, text| {
+    let mut history = KeyHistory::new();
+    let board = moves.iter().try_fold(board, |board, text| {
         let mv = board
             .parse_move(text, notation)
             .map_err(PositionError::Move)?;
+        history.push(board.key());
         Ok(board.make(mv))
-    })
+    })?;
+    Ok((board, history))
 }
 
-/// Handles a `go` command. Only `go perft <depth>` is supported so far.
+/// What a `go` command asks for.
+#[derive(Debug)]
+enum Go {
+    /// `go perft <depth>`: count the leaf nodes below each legal move.
+    Perft(u32),
+    /// Search for the best move within these limits.
+    Search(Limits),
+}
+
+/// Parses a `go` command.
+///
+/// Only `go perft <depth>` and searches limited by `depth` and `nodes` are supported so
+/// far.
+fn parse_go(line: &str) -> Result<Go, GoError> {
+    let args: Vec<&str> = line.split_whitespace().skip(1).collect();
+    if let ["perft", rest @ ..] = args.as_slice() {
+        return match rest {
+            [depth] => depth
+                .parse()
+                .map(Go::Perft)
+                .map_err(|_| GoError::InvalidValue("perft depth", (*depth).to_owned())),
+            _ => Err(GoError::MalformedPerft),
+        };
+    }
+    let mut limits = Limits::default();
+    let mut args = args.into_iter();
+    while let Some(name) = args.next() {
+        let value = args.next();
+        let parse = |field| {
+            value
+                .and_then(|value| value.parse().ok())
+                .ok_or_else(|| GoError::InvalidValue(field, value.unwrap_or_default().to_owned()))
+        };
+        match name {
+            "depth" => limits.depth = Some(parse("depth")?),
+            "nodes" => limits.nodes = Some(parse("nodes")?.into()),
+            other => return Err(GoError::Unsupported(other.to_owned())),
+        }
+    }
+    if limits == Limits::default() {
+        return Err(GoError::MissingLimit);
+    }
+    Ok(Go::Search(limits))
+}
+
+/// Why a `go` command was rejected.
+#[derive(Debug)]
+enum GoError {
+    /// `perft` was not followed by exactly one depth.
+    MalformedPerft,
+    /// A parameter's value was missing or not a valid count.
+    InvalidValue(&'static str, String),
+    /// The parameter is not supported yet.
+    Unsupported(String),
+    /// No limit was given, and the search could not be stopped.
+    MissingLimit,
+}
+
+impl fmt::Display for GoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MalformedPerft => f.write_str("expected go perft <depth>"),
+            Self::InvalidValue(field, value) => write!(f, "invalid {field} {value:?}"),
+            Self::Unsupported(name) => write!(f, "unsupported parameter {name:?}"),
+            Self::MissingLimit => f.write_str("expected depth or nodes"),
+        }
+    }
+}
+
+/// Searches `board`, reached after the positions in `history`, writing an `info` line
+/// for each report and then the `bestmove`.
 fn go(
     output: &mut impl Write,
+    worker: &mut Worker,
     board: &Board,
+    history: &KeyHistory,
+    limits: Limits,
     notation: CastlingNotation,
-    line: &str,
 ) -> io::Result<()> {
-    let args: Vec<&str> = line.split_whitespace().skip(1).collect();
-    match args.as_slice() {
-        ["perft", depth] => match depth.parse::<u32>() {
-            Ok(depth) => write_split_perft(output, board, notation, depth),
-            Err(_) => writeln!(output, "info string invalid perft depth {depth:?}"),
-        },
-        ["perft", ..] => writeln!(output, "info string expected go perft <depth>"),
-        _ => writeln!(
-            output,
-            "info string unsupported go command: {}",
-            line.trim()
-        ),
+    let mut result = Ok(());
+    let best = worker.search(board, history, limits, |report| {
+        if result.is_ok() {
+            result = write_info(output, report, notation);
+        }
+    });
+    result?;
+    match best {
+        Some(mv) => writeln!(output, "bestmove {}", mv.display(notation)),
+        None => writeln!(output, "bestmove 0000"),
     }
+}
+
+/// Writes a search report as an `info` line.
+fn write_info(
+    output: &mut impl Write,
+    report: &Report<'_>,
+    notation: CastlingNotation,
+) -> io::Result<()> {
+    let micros = report.elapsed.as_micros().max(1);
+    let nps = u128::from(report.nodes) * 1_000_000 / micros;
+    let score = match report.score {
+        Score::Centipawns(cp) => format!("cp {cp}"),
+        Score::Mate(moves) => format!("mate {moves}"),
+    };
+    write!(
+        output,
+        "info depth {} seldepth {} score {score} nodes {} nps {nps} time {} hashfull 0 pv",
+        report.depth,
+        report.seldepth,
+        report.nodes,
+        report.elapsed.as_millis(),
+    )?;
+    for mv in report.pv {
+        write!(output, " {}", mv.display(notation))?;
+    }
+    writeln!(output)
 }
 
 /// Writes the reply to `go perft`: the count below each legal move, then the total.
