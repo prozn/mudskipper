@@ -6,6 +6,10 @@ use crate::chess::{Board, Move, MoveList, PieceType};
 /// Rough piece values for ordering captures, indexed by [`PieceType::index`].
 const ORDER_VALUES: [i32; 6] = [100, 300, 300, 500, 900, 0];
 
+/// How much more the victim's value counts than the attacker's, so that any capture of a
+/// more valuable piece comes before every capture of a less valuable one.
+const VICTIM_WEIGHT: i32 = 10;
+
 /// Moves handed out best first, choosing the next one only when it is asked for, so a
 /// cutoff skips sorting the rest.
 pub(super) struct OrderedMoves {
@@ -70,7 +74,7 @@ fn score(board: &Board, mv: Move) -> i32 {
             .piece_at(mv.from())
             .expect("a move's origin holds a piece")
             .piece_type();
-        score += 10 * ORDER_VALUES[victim.index()] - ORDER_VALUES[attacker.index()];
+        score += VICTIM_WEIGHT * ORDER_VALUES[victim.index()] - ORDER_VALUES[attacker.index()];
     }
     if let Some(promotion) = mv.promotion() {
         score += ORDER_VALUES[promotion.index()];

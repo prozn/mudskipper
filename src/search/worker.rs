@@ -43,7 +43,10 @@ pub struct Report<'pv> {
 #[derive(Debug)]
 pub struct Worker {
     pv: PvTable,
+    /// Keys of every position before the current one, from the game and the search.
     history: KeyHistory,
+    /// Keys of the positions before the current one since the search's root.
+    tree: KeyHistory,
     nodes: u64,
     seldepth: usize,
     limits: Limits,
@@ -57,6 +60,7 @@ impl Worker {
         Self {
             pv: PvTable::new(),
             history: KeyHistory::new(),
+            tree: KeyHistory::new(),
             nodes: 0,
             seldepth: 0,
             limits: Limits::default(),
@@ -79,6 +83,7 @@ impl Worker {
         let start = Instant::now();
         let mut best_move = *board.legal_moves().first()?;
         self.history.clone_from(history);
+        self.tree = KeyHistory::new();
         self.nodes = 0;
         self.seldepth = 0;
         self.limits = limits;
@@ -87,35 +92,26 @@ impl Worker {
         let max_depth = limits
             .depth
             .map_or(MAX_DEPTH, |depth| depth.clamp(1, MAX_DEPTH));
-        let mut completed: Option<(u32, i32, Vec<Move>)> = None;
+        let mut completed: Option<Iteration> = None;
         for depth in 1..=max_depth {
             let score = self.negamax(board, depth, 0, -INFINITY, INFINITY);
             if self.stopped {
                 break;
             }
-            let pv = self.pv.line(0).to_vec();
-            best_move = pv[0];
-            report(&Report {
+            let iteration = Iteration {
                 depth,
                 seldepth: self.seldepth,
                 score: Score::from_internal(score),
-                nodes: self.nodes,
-                elapsed: start.elapsed(),
-                pv: &pv,
-            });
-            completed = Some((depth, score, pv));
+                pv: self.pv.line(0).to_vec(),
+            };
+            best_move = iteration.pv[0];
+            report(&iteration.report(self.nodes, start.elapsed()));
+            completed = Some(iteration);
         }
         if self.stopped
-            && let Some((depth, score, pv)) = &completed
+            && let Some(iteration) = &completed
         {
-            report(&Report {
-                depth: *depth,
-                seldepth: self.seldepth,
-                score: Score::from_internal(*score),
-                nodes: self.nodes,
-                elapsed: start.elapsed(),
-                pv,
-            });
+            report(&iteration.report(self.nodes, start.elapsed()));
         }
         Some(best_move)
     }
@@ -124,13 +120,10 @@ impl Worker {
     /// within the window `alpha` to `beta`.
     fn negamax(&mut self, board: &Board, depth: u32, ply: usize, mut alpha: i32, beta: i32) -> i32 {
         self.pv.clear(ply);
-        if ply > 0 && self.is_draw(board) {
-            return DRAW;
-        }
         if depth == 0 {
             return self.quiescence(board, ply, alpha, beta);
         }
-        if self.visit(ply) {
+        if self.visit(ply) || (ply > 0 && self.is_draw(board)) {
             return DRAW;
         }
         if ply >= MAX_PLY - 1 {
@@ -145,9 +138,9 @@ impl Worker {
             }
             legal_moves += 1;
             let child = board.make(mv);
-            self.history.push(board.key());
+            self.enter(board);
             let score = -self.negamax(&child, depth - 1, ply + 1, -beta, -alpha);
-            self.history.pop();
+            self.leave();
             if self.stopped {
                 return DRAW;
             }
@@ -178,7 +171,7 @@ impl Worker {
     /// The side to move may stand pat on the static evaluation instead of capturing.
     /// In check it may not, and every evasion is searched so that mates are seen.
     fn quiescence(&mut self, board: &Board, ply: usize, mut alpha: i32, beta: i32) -> i32 {
-        if self.visit(ply) {
+        if self.visit(ply) || self.is_draw(board) {
             return DRAW;
         }
         if ply >= MAX_PLY {
@@ -205,9 +198,9 @@ impl Worker {
             }
             legal_moves += 1;
             let child = board.make(mv);
-            self.history.push(board.key());
+            self.enter(board);
             let score = -self.quiescence(&child, ply + 1, -beta, -alpha);
-            self.history.pop();
+            self.leave();
             if self.stopped {
                 return DRAW;
             }
@@ -238,15 +231,52 @@ impl Worker {
         false
     }
 
+    /// Records that the search is moving on from `board` to one of its children.
+    fn enter(&mut self, board: &Board) {
+        self.history.push(board.key());
+        self.tree.push(board.key());
+    }
+
+    /// Undoes the matching [`Worker::enter`] on returning from a child.
+    fn leave(&mut self) {
+        self.history.pop();
+        self.tree.pop();
+    }
+
     /// Reports whether `board` is drawn by repetition, the fifty-move rule or
     /// insufficient material.
     ///
-    /// A single earlier occurrence counts as a repetition: if repeating is best now, it
-    /// stays best when the position comes round again.
+    /// A position that already occurred since the root counts as a repetition: if
+    /// repeating is best now, it stays best when the position comes round again. Earlier
+    /// positions in the game count only once they make a threefold repetition.
     fn is_draw(&self, board: &Board) -> bool {
-        self.history.repetitions(board) > 0
+        self.tree.repetitions(board) > 0
+            || self.history.repetitions(board) >= 2
             || board.is_fifty_move_draw()
             || board.has_insufficient_material()
+    }
+}
+
+/// The result of a completed iteration of iterative deepening.
+#[derive(Debug)]
+struct Iteration {
+    depth: u32,
+    seldepth: usize,
+    score: Score,
+    pv: Vec<Move>,
+}
+
+impl Iteration {
+    /// Reports this iteration with the search's current node count and elapsed time.
+    fn report(&self, nodes: u64, elapsed: Duration) -> Report<'_> {
+        Report {
+            depth: self.depth,
+            seldepth: self.seldepth,
+            score: self.score,
+            nodes,
+            elapsed,
+            pv: &self.pv,
+        }
     }
 }
 

@@ -606,3 +606,18 @@ fn malformed_go_commands_get_info_strings() {
     engine.send("isready");
     engine.expect_line("readyok");
 }
+
+#[test]
+fn go_depth_does_not_score_a_twofold_repetition_of_the_game_as_a_draw() {
+    // Ke1-d1 would repeat a position from the game for only the second time, which is not
+    // a draw, so White is still lost whatever it plays.
+    let mut engine = Engine::start();
+    engine.send("position fen 4k2q/8/8/8/8/8/8/4K3 w - - 0 1 moves e1d1 h8h7 d1e1 h7h8");
+    let reply = search(&mut engine, "depth 2");
+    let score = final_score(&reply);
+    let cp: i32 = score
+        .strip_prefix("cp ")
+        .and_then(|cp| cp.parse().ok())
+        .unwrap_or_else(|| panic!("expected a centipawn score, got {score:?}"));
+    assert!(cp < -500, "White is a queen down but scored {cp}");
+}
