@@ -31,7 +31,7 @@ fn main() -> ExitCode {
 
 /// Runs Bench to `depth`, writing to standard output.
 fn run_bench(depth: u32) -> io::Result<()> {
-    bench::run(depth, &mut io::stdout().lock()).map(drop)
+    bench::run(depth, &mut io::stdout().lock())
 }
 
 /// Reports a command-line mistake and how to run the engine.

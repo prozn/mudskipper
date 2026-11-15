@@ -69,30 +69,14 @@ const POSITIONS: [&str; 50] = [
     "bnrqkbrn/pppppppp/8/8/8/8/PPPPPPPP/BNRQKBRN w GCgc - 0 1",
 ];
 
-/// The outcome of a Bench run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Summary {
-    /// The nodes searched over every position: the **Bench signature**.
-    pub nodes: u64,
-    /// The time spent searching.
-    pub elapsed: Duration,
-}
-
-impl Summary {
-    /// Nodes searched per second.
-    #[must_use]
-    pub fn nps(&self) -> u64 {
-        let micros = self.elapsed.as_micros().max(1);
-        (u128::from(self.nodes) * 1_000_000 / micros) as u64
-    }
-}
-
 /// Searches every Bench position to `depth`, writing one line per position to `output`
 /// and then the final line `<nodes> nodes <nps> nps`.
 ///
-/// Each position is searched by a fresh single-threaded [`Worker`] with no time or node
-/// limit, so nothing learned from one position carries over to the next and the node
-/// count depends only on the code, never on timing or the platform.
+/// Bench runs on one thread with a 16 MB hash, and clears the hash and the histories
+/// between positions: each position is searched by a fresh [`Worker`] with no time or
+/// node limit, so nothing learned from one position carries over to the next and the
+/// node count depends only on the code, never on timing or the platform. There is no
+/// hash table yet; when one arrives, each position must get a fresh 16 MB table.
 ///
 /// # Errors
 ///
@@ -101,15 +85,13 @@ impl Summary {
 /// # Panics
 ///
 /// Panics if one of the fixed Bench positions is not a valid FEN, which is a bug.
-pub fn run(depth: u32, output: &mut impl Write) -> io::Result<Summary> {
+pub fn run(depth: u32, output: &mut impl Write) -> io::Result<()> {
     let limits = Limits {
         depth: Some(depth),
         ..Limits::default()
     };
-    let mut summary = Summary {
-        nodes: 0,
-        elapsed: Duration::ZERO,
-    };
+    let mut total_nodes = 0;
+    let mut elapsed = Duration::ZERO;
     for (index, fen) in POSITIONS.iter().enumerate() {
         let board = Board::from_fen(fen)
             .unwrap_or_else(|err| panic!("bench position {fen:?} is invalid: {err}"));
@@ -118,8 +100,8 @@ pub fn run(depth: u32, output: &mut impl Write) -> io::Result<Summary> {
         let mut nodes = 0;
         let start = Instant::now();
         worker.search(&game, limits, |report| nodes = report.nodes);
-        summary.elapsed += start.elapsed();
-        summary.nodes += nodes;
+        elapsed += start.elapsed();
+        total_nodes += nodes;
         writeln!(
             output,
             "position {:>2}/{} nodes {nodes:>9} fen {fen}",
@@ -127,9 +109,10 @@ pub fn run(depth: u32, output: &mut impl Write) -> io::Result<Summary> {
             POSITIONS.len(),
         )?;
     }
+    let micros = elapsed.as_micros().max(1);
+    let nps = u64::try_from(u128::from(total_nodes) * 1_000_000 / micros).unwrap_or(u64::MAX);
     writeln!(output)?;
-    writeln!(output, "{} nodes {} nps", summary.nodes, summary.nps())?;
-    Ok(summary)
+    writeln!(output, "{total_nodes} nodes {nps} nps")
 }
 
 #[cfg(test)]

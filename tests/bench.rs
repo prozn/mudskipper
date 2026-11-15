@@ -10,9 +10,9 @@ fn run(args: &[&str]) -> Output {
         .expect("engine binary should start")
 }
 
-/// Runs `bench` with `args`, checks it succeeded, and returns the node count and nps from
-/// its final line.
-fn bench(args: &[&str]) -> (u64, u64) {
+/// Runs `bench` with `args`, checks it succeeded and that its final line is
+/// `<nodes> nodes <nps> nps`, and returns the node count.
+fn bench(args: &[&str]) -> u64 {
     let output = run(args);
     let stdout = String::from_utf8(output.stdout).expect("bench output is UTF-8");
     assert!(output.status.success(), "bench failed: {stdout}");
@@ -25,19 +25,20 @@ fn bench(args: &[&str]) -> (u64, u64) {
         n.parse::<u64>()
             .unwrap_or_else(|err| panic!("{n:?} in {last:?}: {err}"))
     };
-    (parse(nodes), parse(nps))
+    parse(nps);
+    parse(nodes)
 }
 
 #[test]
-fn bench_ends_with_nodes_and_nps() {
-    let (nodes, _) = bench(&["bench", "1"]);
+fn bench_final_line_reports_nodes_and_nps() {
+    let nodes = bench(&["bench", "1"]);
     assert!(nodes > 0, "bench searched no nodes");
 }
 
 #[test]
 fn bench_depth_argument_overrides_the_depth() {
-    let (shallow, _) = bench(&["bench", "1"]);
-    let (deeper, _) = bench(&["bench", "2"]);
+    let shallow = bench(&["bench", "1"]);
+    let deeper = bench(&["bench", "2"]);
     assert!(
         deeper > shallow,
         "depth 2 searched {deeper} nodes, depth 1 searched {shallow}"
@@ -46,8 +47,8 @@ fn bench_depth_argument_overrides_the_depth() {
 
 #[test]
 fn bench_node_count_is_identical_across_runs() {
-    let (first, _) = bench(&["bench", "2"]);
-    let (second, _) = bench(&["bench", "2"]);
+    let first = bench(&["bench", "2"]);
+    let second = bench(&["bench", "2"]);
     assert_eq!(first, second, "two bench runs disagree");
 }
 

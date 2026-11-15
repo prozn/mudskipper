@@ -33,11 +33,11 @@ The squash-merge commit has a short summary line, then the SPRT summary, then th
 Add a transposition table
 
 Elo   | 48.31 +- 12.40 (95%)
-SPRT  | 8.0+0.08s Threads=1 Hash=16MB
+SPRT  | 8.0+0.08s Threads=1 Hash=16
 LLR   | 2.96 (-2.94, 2.94) [0.00, 3.00]
 Games | N: 1846 W: 712 L: 461 D: 673
 
-Bench: 19654115
+Bench: 8312407
 ```
 
 - **Elo**: the measured Elo difference and its 95% error.
