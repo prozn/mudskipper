@@ -40,5 +40,5 @@ A FEN castling notation that writes `KQkq` for the outermost rook on each side o
 A FEN castling notation that always writes the rook's file, such as `HAha` for the standard start position. `d` prints it when `UCI_Chess960` is on.
 
 **Repetition**:
-A position recurring in a game with the same Zobrist key: same placement, side to move, castling rights and available en passant capture. Positions before the last capture or pawn move are never compared. `KeyHistory::repetitions` counts earlier occurrences, so a count of 2 is a threefold repetition.
+A position recurring in a game with the same Zobrist key: same placement, side to move and castling rights, and the same en passant file when a pawn stands beside the pawn that just double-pushed (pins are ignored). Positions before the last capture or pawn move are never compared. `KeyHistory::repetitions` counts earlier occurrences, so a count of 2 is a threefold repetition.
 _Avoid_: Draw by repetition (when only one recurrence is meant)

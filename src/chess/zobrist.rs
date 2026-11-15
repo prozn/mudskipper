@@ -12,7 +12,7 @@ use super::square::Square;
 /// Zobrist key of a position, as returned by [`Board::key`](super::Board::key).
 ///
 /// Equal positions have equal keys. Unequal positions almost always have unequal keys.
-/// Formatting with `{:X}` or `{:x}` prints the key in hexadecimal.
+/// Formatting with `{:X}` prints the key in hexadecimal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Key(u64);
 
@@ -26,12 +26,6 @@ impl Key {
 impl fmt::UpperHex for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::UpperHex::fmt(&self.0, f)
-    }
-}
-
-impl fmt::LowerHex for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::LowerHex::fmt(&self.0, f)
     }
 }
 

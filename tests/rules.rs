@@ -2,27 +2,32 @@
 
 use mudskipper::chess::{Board, CastlingNotation, KeyHistory};
 
-fn board(fen: &str) -> Board {
+fn parse(fen: &str) -> Board {
     Board::from_fen(fen).unwrap_or_else(|err| panic!("{fen:?}: {err}"))
+}
+
+/// Plays one move, written in standard UCI notation.
+fn play_move(board: &Board, text: &str) -> Board {
+    let mv = board
+        .parse_move(text, CastlingNotation::Standard)
+        .unwrap_or_else(|err| panic!("{text} in {}: {err}", board.to_fen()));
+    board.make(mv)
 }
 
 /// Plays `moves`, written in standard UCI notation, from `fen`.
 fn play(fen: &str, moves: &[&str]) -> Board {
-    moves.iter().fold(board(fen), |board, text| {
-        let mv = board
-            .parse_move(text, CastlingNotation::Standard)
-            .unwrap_or_else(|err| panic!("{text} in {}: {err}", board.to_fen()));
-        board.make(mv)
-    })
+    moves
+        .iter()
+        .fold(parse(fen), |board, text| play_move(&board, text))
 }
 
 /// Plays `moves` from `fen` as a game, returning the final position and the keys of the
 /// positions before it.
 fn play_game(fen: &str, moves: &[&str]) -> (Board, KeyHistory) {
     let mut history = KeyHistory::new();
-    let board = moves.iter().fold(board(fen), |board, text| {
+    let board = moves.iter().fold(parse(fen), |board, text| {
         history.push(board.key());
-        play(&board.to_fen(), &[text])
+        play_move(&board, text)
     });
     (board, history)
 }
@@ -31,36 +36,43 @@ const STARTPOS: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
 
 #[test]
 fn fifty_move_rule_applies_from_the_hundredth_halfmove() {
-    assert!(!board("8/8/4k3/8/8/4K3/8/R7 w - - 99 80").is_fifty_move_draw());
-    assert!(board("8/8/4k3/8/8/4K3/8/R7 w - - 100 80").is_fifty_move_draw());
-    assert!(play("8/8/4k3/8/8/4K3/8/R7 w - - 99 80", &["a1a2"]).is_fifty_move_draw());
+    for (fen, moves, drawn) in [
+        ("8/8/4k3/8/8/4K3/8/R7 w - - 99 80", &[][..], false),
+        ("8/8/4k3/8/8/4K3/8/R7 w - - 100 80", &[], true),
+        ("8/8/4k3/8/8/4K3/8/R7 w - - 99 80", &["a1a2"], true),
+    ] {
+        assert_eq!(
+            play(fen, moves).is_fifty_move_draw(),
+            drawn,
+            "{fen:?} after {moves:?}"
+        );
+    }
 }
 
 #[test]
 fn captures_and_pawn_moves_reset_the_fifty_move_count() {
     let fen = "8/8/4k3/8/2p5/5K2/4P3/R7 w - - 99 80";
-    let quiet = play(fen, &["a1a2"]);
-    assert_eq!(quiet.halfmove_clock(), 100);
-    assert!(quiet.is_fifty_move_draw());
-
-    let pawn_move = play(fen, &["e2e4"]);
-    assert_eq!(pawn_move.halfmove_clock(), 0);
-    assert!(!pawn_move.is_fifty_move_draw());
-
-    let capture = play(fen, &["a1a4", "e6d5", "a4c4"]);
-    assert_eq!(capture.halfmove_clock(), 0);
-    assert!(!capture.is_fifty_move_draw());
+    for (moves, clock, drawn) in [
+        (&["a1a2"][..], 100, true),
+        (&["e2e4"], 0, false),
+        (&["a1a4", "e6d5", "a4c4"], 0, false),
+    ] {
+        let board = play(fen, moves);
+        assert_eq!(board.halfmove_clock(), clock, "after {moves:?}");
+        assert_eq!(board.is_fifty_move_draw(), drawn, "after {moves:?}");
+    }
 }
 
 #[test]
 fn checkmate_on_the_hundredth_halfmove_is_not_a_fifty_move_draw() {
     let mated = play("k7/8/1K6/8/8/8/8/7R w - - 99 80", &["h1h8"]);
-    assert!(mated.in_check() && mated.legal_moves().is_empty());
-    assert!(!mated.is_fifty_move_draw());
+    assert!(mated.in_check(), "{}", mated.to_fen());
+    assert!(mated.legal_moves().is_empty(), "{}", mated.to_fen());
+    assert!(!mated.is_fifty_move_draw(), "{}", mated.to_fen());
 
     let checked = play("k7/8/8/1K6/8/8/8/7R w - - 99 80", &["h1h8"]);
-    assert!(checked.in_check());
-    assert!(checked.is_fifty_move_draw());
+    assert!(checked.in_check(), "{}", checked.to_fen());
+    assert!(checked.is_fifty_move_draw(), "{}", checked.to_fen());
 }
 
 #[test]
@@ -70,7 +82,7 @@ fn bare_kings_and_a_single_minor_piece_are_insufficient_material() {
         "8/8/4k3/8/8/4K3/8/1N6 w - - 0 1",
         "8/8/4k3/8/8/4K3/8/2b5 b - - 0 1",
     ] {
-        assert!(board(fen).has_insufficient_material(), "{fen:?}");
+        assert!(parse(fen).has_insufficient_material(), "{fen:?}");
     }
 }
 
@@ -80,7 +92,7 @@ fn bishops_all_on_one_square_colour_are_insufficient_material() {
         "8/8/4k3/8/8/4K3/8/2B1b3 w - - 0 1",
         "8/8/4k1b1/8/8/4K3/8/1B1B4 w - - 0 1",
     ] {
-        assert!(board(fen).has_insufficient_material(), "{fen:?}");
+        assert!(parse(fen).has_insufficient_material(), "{fen:?}");
     }
 }
 
@@ -101,7 +113,7 @@ fn material_that_can_still_mate_is_sufficient() {
         ),
         ("8/8/4k3/8/8/4K3/8/2BB4 w - - 0 1", "a bishop pair"),
     ] {
-        assert!(!board(fen).has_insufficient_material(), "{why}: {fen:?}");
+        assert!(!parse(fen).has_insufficient_material(), "{why}: {fen:?}");
     }
 }
 
@@ -154,18 +166,18 @@ fn positions_before_an_irreversible_move_are_not_compared() {
     // The history holds the key of this very position, but the halfmove clock says a
     // capture or pawn move came after it, so it cannot be the same game position.
     let fen = "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1";
-    let board = board(fen);
+    let board = parse(fen);
     let mut history = KeyHistory::new();
     history.push(board.key());
     history.push(Board::startpos().key());
     assert_eq!(history.repetitions(&board), 0);
 
-    let reversible = Board::from_fen("4k3/8/8/8/8/8/4P3/4K3 w - - 2 1").expect("valid FEN");
+    let reversible = parse("4k3/8/8/8/8/8/4P3/4K3 w - - 2 1");
     assert_eq!(history.repetitions(&reversible), 1);
 }
 
 #[test]
-fn a_pawn_move_between_shuffles_ends_the_repetition_count() {
+fn shuffles_after_a_pawn_move_repeat_the_position_after_it() {
     let (board, history) = play_game(
         STARTPOS,
         &[
