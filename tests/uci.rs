@@ -244,3 +244,100 @@ fn malformed_go_perft_gets_an_info_string() {
     engine.send("isready");
     engine.expect_line("readyok");
 }
+
+#[test]
+fn uci_lists_the_uci_chess960_option() {
+    let mut engine = Engine::start();
+    engine.send("uci");
+    let before = engine.expect_line("uciok");
+    assert!(
+        before
+            .iter()
+            .any(|l| l == "option name UCI_Chess960 type check default false"),
+        "missing UCI_Chess960 option in {before:?}"
+    );
+}
+
+/// Sends `go perft 1` and returns the moves it lists.
+fn perft_moves(engine: &mut Engine) -> Vec<String> {
+    engine.send("go perft 1");
+    let before = engine.read_line_matching("a Nodes searched line", |line| {
+        line.starts_with("Nodes searched: ")
+    });
+    before
+        .before
+        .iter()
+        .filter_map(|line| line.split_once(':').map(|(mv, _)| mv.to_owned()))
+        .collect()
+}
+
+#[test]
+fn uci_chess960_toggles_castling_between_king_takes_rook_and_standard_notation() {
+    let fen = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
+    let castled = "2kr3r/8/8/8/8/8/8/R4RK1 w - - 2 2";
+    let mut engine = Engine::start();
+
+    engine.send("setoption name UCI_Chess960 value true");
+    engine.send(&format!("position fen {fen}"));
+    let moves = perft_moves(&mut engine);
+    for castling in ["e1h1", "e1a1"] {
+        assert!(
+            moves.iter().any(|mv| mv == castling),
+            "{castling} missing from {moves:?}"
+        );
+    }
+    for standard in ["e1g1", "e1c1"] {
+        assert!(
+            !moves.iter().any(|mv| mv == standard),
+            "{standard} listed in {moves:?}"
+        );
+    }
+    engine.send(&format!("position fen {fen} moves e1h1 e8a8"));
+    assert_eq!(reported_fen(&mut engine), castled);
+    engine.send(&format!("position fen {fen} moves e1g1"));
+    let reply = engine.expect_info_string();
+    assert!(reply.contains("e1g1"), "e1g1 should be illegal: {reply:?}");
+
+    engine.send("setoption name UCI_Chess960 value false");
+    engine.send(&format!("position fen {fen}"));
+    let moves = perft_moves(&mut engine);
+    for standard in ["e1g1", "e1c1"] {
+        assert!(
+            moves.iter().any(|mv| mv == standard),
+            "{standard} missing from {moves:?}"
+        );
+    }
+    engine.send(&format!("position fen {fen} moves e1g1 e8c8"));
+    assert_eq!(reported_fen(&mut engine), castled);
+}
+
+#[test]
+fn uci_chess960_d_reports_shredder_fen() {
+    let mut engine = Engine::start();
+    engine.send("setoption name UCI_Chess960 value true");
+    engine.send("position startpos");
+    assert_eq!(
+        reported_fen(&mut engine),
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w HAha - 0 1"
+    );
+}
+
+#[test]
+fn malformed_setoption_commands_get_info_strings() {
+    let mut engine = Engine::start();
+    for command in [
+        "setoption",
+        "setoption name Hash value 16",
+        "setoption name UCI_Chess960 value maybe",
+        "setoption name UCI_Chess960",
+    ] {
+        engine.send(command);
+        let reply = engine.expect_info_string();
+        assert!(
+            !reply.contains("unknown command"),
+            "{command:?} should be reported as a bad setoption command: {reply:?}"
+        );
+    }
+    engine.send("isready");
+    engine.expect_line("readyok");
+}

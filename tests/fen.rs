@@ -341,3 +341,65 @@ fn en_passant_square_without_a_capturing_pawn_does_not_affect_the_key() {
         key("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"),
     );
 }
+
+/// Chess960 positions as (Shredder-FEN, X-FEN) pairs describing the same position.
+const CHESS960: [(&str, &str); 5] = [
+    (
+        "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+        "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w KQkq - 2 9",
+    ),
+    (
+        "b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9",
+        "b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w KQ - 1 9",
+    ),
+    (
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w HAha - 0 1",
+        STARTPOS,
+    ),
+    // Inner rooks: X-FEN names them by file, and the outer rooks by K and Q.
+    (
+        "4k3/8/8/8/8/8/8/RR2KRR1 w FB - 0 1",
+        "4k3/8/8/8/8/8/8/RR2KRR1 w FB - 0 1",
+    ),
+    (
+        "rr2krr1/8/8/8/8/8/8/4K3 b ga - 0 1",
+        "rr2krr1/8/8/8/8/8/8/4K3 b kq - 0 1",
+    ),
+];
+
+#[test]
+fn chess960_castling_round_trips_in_shredder_fen_and_x_fen() {
+    for (shredder, x_fen) in CHESS960 {
+        for fen in [shredder, x_fen] {
+            let board =
+                Board::from_fen(fen).unwrap_or_else(|err| panic!("{fen:?} should parse: {err}"));
+            assert_eq!(board.to_shredder_fen(), shredder, "Shredder-FEN of {fen:?}");
+            assert_eq!(board.to_fen(), x_fen, "X-FEN of {fen:?}");
+        }
+    }
+}
+
+#[test]
+fn chess960_castling_field_naming_no_castling_rook_is_rejected() {
+    for (fen, field) in [
+        // No rook on the named file.
+        ("4k3/8/8/8/8/8/8/R3K2R w G - 0 1", "G"),
+        // The king's own file.
+        ("4k3/8/8/8/8/8/8/R3K2R w E - 0 1", "E"),
+        // A black rook named for white.
+        ("r3k3/8/8/8/8/8/8/4K2R w A - 0 1", "A"),
+        // Two rights on the same side.
+        ("4k3/8/8/8/8/8/8/4KRR1 w FG - 0 1", "FG"),
+        ("4k3/8/8/8/8/8/8/4KRR1 w KF - 0 1", "KF"),
+        // The king is off its back rank.
+        ("4k3/8/8/8/8/8/4K3/7R w H - 0 1", "H"),
+        // Not a file letter.
+        ("4k3/8/8/8/8/8/8/4K2R w I - 0 1", "I"),
+    ] {
+        assert_eq!(
+            rejection(fen),
+            ParseFenError::InvalidCastling(field.to_owned()),
+            "{fen:?}"
+        );
+    }
+}

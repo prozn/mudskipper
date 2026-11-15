@@ -136,3 +136,99 @@ fn deep_suite() {
         assert_eq!(board(fen).perft(depth), want, "perft {depth} of {fen:?}");
     }
 }
+
+/// Chess960 positions in Shredder-FEN, with counts from the published Chess960 Perft suite
+/// (the first three) and python-chess.
+const CHESS960: [(&str, &[u64]); 13] = [
+    (
+        "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+        &[21, 528, 12_189, 326_672],
+    ),
+    (
+        "2nnrbkr/p1qppppp/8/1ppb4/6PP/3PP3/PPP2P2/BQNNRBKR w HEhe - 1 9",
+        &[21, 807, 18_002, 667_366],
+    ),
+    (
+        "b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9",
+        &[20, 479, 10_471, 273_318],
+    ),
+    (
+        "qbbnnrkr/2pp2pp/p7/1p2pp2/8/P3PP2/1PPP1KPP/QBBNNR1R w hf - 0 9",
+        &[22, 593, 13_440, 382_958],
+    ),
+    (
+        "1nbbnrkr/p1p1ppp1/3p4/1p3P1p/3Pq2P/8/PPP1P1P1/QNBBNRKR w HFhf - 0 9",
+        &[28, 1_120, 31_058, 1_171_749],
+    ),
+    (
+        "qnbnr1kr/ppp1b1pp/4p3/3p1p2/8/2NPP3/PPP1BPPP/QNB1R1KR w HEhe - 1 9",
+        &[29, 899, 26_578, 824_055],
+    ),
+    (
+        "1qbnrbkr/1p1ppppp/8/p1p5/5P2/P2P4/1PP1P1PP/QNBNRBKR w HEhe - 0 9",
+        &[22, 484, 11_480, 277_517],
+    ),
+    (
+        "bnrqkbrn/pppppppp/8/8/8/8/PPPPPPPP/BNRQKBRN w GCgc - 0 1",
+        &[19, 361, 7_697, 163_313],
+    ),
+    // Rooks on both sides of each king, with the king on its castling square or not.
+    (
+        "2r1kr2/8/8/8/8/8/8/1R2K1R1 w GBfc - 0 1",
+        &[22, 501, 11_459, 264_663],
+    ),
+    // Kings on b1 and b8 castle queen side with the rook already beside them.
+    (
+        "rk2r3/8/8/8/8/8/8/RK2R3 w Aa - 0 1",
+        &[23, 441, 9_870, 210_332],
+    ),
+    // Kings on c1 and c8 with a castling rook on the g- and h-file.
+    (
+        "1rk4r/8/8/8/8/8/8/1RK3R1 w GBhb - 0 1",
+        &[24, 487, 11_415, 250_698],
+    ),
+    // Kings already on g1 and g8, so king side castling moves only the rook.
+    (
+        "1r4kr/8/8/8/8/8/8/1R4KR w HBhb - 0 1",
+        &[24, 479, 10_954, 237_166],
+    ),
+    // Kings on b1 and b8 between their rooks: the king side rook lands on the f-file past
+    // the king, and the queen side rook lands on the d-file.
+    (
+        "rkr5/8/8/8/8/8/8/RKR5 w CAca - 0 1",
+        &[20, 328, 6_855, 138_584],
+    ),
+];
+
+#[test]
+fn chess960_positions() {
+    for (fen, counts) in CHESS960 {
+        assert_perft(fen, counts);
+    }
+}
+
+/// Deeper counts from the published Chess960 Perft suite. Run by hand with `cargo test
+/// --release -- --ignored`.
+#[test]
+#[ignore = "slow: run by hand in release mode"]
+fn chess960_deep_suite() {
+    for (fen, depth, want) in [
+        (
+            "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+            6,
+            227_689_589,
+        ),
+        (
+            "2nnrbkr/p1qppppp/8/1ppb4/6PP/3PP3/PPP2P2/BQNNRBKR w HEhe - 1 9",
+            6,
+            590_751_109,
+        ),
+        (
+            "b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9",
+            6,
+            177_654_692,
+        ),
+    ] {
+        assert_eq!(board(fen).perft(depth), want, "perft {depth} of {fen:?}");
+    }
+}

@@ -1,6 +1,6 @@
 //! Move generation, making moves and UCI move notation through the `chess` API (Seam 2).
 
-use mudskipper::chess::{Board, MoveList, ParseMoveError};
+use mudskipper::chess::{Board, CastlingNotation, MoveList, ParseMoveError};
 
 /// The quick Perft suite positions, plus one with an en passant capture available.
 const POSITIONS: [&str; 8] = [
@@ -121,7 +121,7 @@ fn every_legal_move_round_trips_through_uci_notation() {
     for board in boards() {
         for &mv in &board.legal_moves() {
             assert_eq!(
-                board.parse_move(&mv.to_string()),
+                board.parse_move(&mv.to_string(), CastlingNotation::Standard),
                 Ok(mv),
                 "in {}",
                 board.to_fen()
@@ -135,13 +135,13 @@ fn parse_move_rejects_malformed_and_illegal_moves() {
     let board = Board::startpos();
     for text in ["", "e2", "e2e4x", "e2e9", "i2i4", "e2e4 ", "e2e\u{e9}"] {
         assert_eq!(
-            board.parse_move(text),
+            board.parse_move(text, CastlingNotation::Standard),
             Err(ParseMoveError::Malformed(text.to_owned()))
         );
     }
     for text in ["e2e5", "e1g1", "e7e5", "e2e4q"] {
         assert_eq!(
-            board.parse_move(text),
+            board.parse_move(text, CastlingNotation::Standard),
             Err(ParseMoveError::Illegal(text.to_owned()))
         );
     }
@@ -163,7 +163,11 @@ fn a_pinned_knight_has_pseudo_legal_moves_but_no_legal_ones() {
 
 #[test]
 fn a_double_push_records_the_same_position_as_its_fen() {
-    let after_e4 = Board::startpos().make(Board::startpos().parse_move("e2e4").expect("legal"));
+    let after_e4 = Board::startpos().make(
+        Board::startpos()
+            .parse_move("e2e4", CastlingNotation::Standard)
+            .expect("legal"),
+    );
     let parsed = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1")
         .expect("valid FEN");
     assert_eq!(after_e4, parsed);
@@ -174,4 +178,46 @@ fn in_check_reports_whether_the_side_to_move_is_attacked() {
     assert!(!Board::startpos().in_check());
     let checked = Board::from_fen("4k3/8/8/8/8/8/8/4K2r w - - 0 1").expect("valid FEN");
     assert!(checked.in_check());
+}
+
+#[test]
+fn every_legal_move_round_trips_through_king_takes_rook_notation() {
+    let chess960 = [
+        "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+        "1r4kr/8/8/8/8/8/8/1R4KR w HBhb - 0 1",
+        "rkr5/8/8/8/8/8/8/RKR5 w CAca - 0 1",
+    ]
+    .map(|fen| Board::from_fen(fen).unwrap_or_else(|err| panic!("{fen:?}: {err}")));
+    for board in boards().chain(chess960) {
+        for &mv in &board.legal_moves() {
+            let text = mv.display(CastlingNotation::KingTakesRook).to_string();
+            assert_eq!(
+                board.parse_move(&text, CastlingNotation::KingTakesRook),
+                Ok(mv),
+                "{text} in {}",
+                board.to_fen()
+            );
+        }
+    }
+}
+
+#[test]
+fn castling_with_the_king_already_on_its_castling_square_is_written_king_takes_rook() {
+    let board = Board::from_fen("1r4kr/8/8/8/8/8/8/1R4KR w HBhb - 0 1").expect("valid FEN");
+    let castling: Vec<String> = board
+        .legal_moves()
+        .iter()
+        .filter(|mv| mv.is_castling())
+        .map(|mv| mv.display(CastlingNotation::KingTakesRook).to_string())
+        .collect();
+    assert_eq!(castling, ["g1h1", "g1b1"]);
+    let after = board.make(
+        board
+            .parse_move("g1h1", CastlingNotation::KingTakesRook)
+            .expect("castling is legal"),
+    );
+    assert_eq!(
+        after.to_shredder_fen(),
+        "1r4kr/8/8/8/8/8/8/1R3RK1 b hb - 1 1"
+    );
 }
