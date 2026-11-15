@@ -1,6 +1,6 @@
 //! Sets of squares packed into 64-bit integers.
 
-use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
+use std::ops::{BitAnd, BitOr, BitXorAssign, Not};
 
 use super::piece::Colour;
 use super::square::Square;
@@ -12,9 +12,6 @@ pub struct Bitboard(u64);
 impl Bitboard {
     /// The empty set.
     pub const EMPTY: Self = Self(0);
-
-    /// Every square of the board.
-    pub const FULL: Self = Self(u64::MAX);
 
     /// Returns the set whose bit `i` is set for each square with index `i` in `bits`.
     pub(crate) const fn from_bits(bits: u64) -> Self {
@@ -96,31 +93,11 @@ impl BitAnd for Bitboard {
     }
 }
 
-impl BitAndAssign for Bitboard {
-    fn bitand_assign(&mut self, rhs: Self) {
-        self.0 &= rhs.0;
-    }
-}
-
 impl BitOr for Bitboard {
     type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self {
         Self(self.0 | rhs.0)
-    }
-}
-
-impl BitOrAssign for Bitboard {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
-    }
-}
-
-impl BitXor for Bitboard {
-    type Output = Self;
-
-    fn bitxor(self, rhs: Self) -> Self {
-        Self(self.0 ^ rhs.0)
     }
 }
 

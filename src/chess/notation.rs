@@ -4,8 +4,7 @@ use std::error::Error;
 use std::fmt;
 
 use super::board::Board;
-use super::moves::Move;
-use super::piece::PieceType;
+use super::moves::{Move, promotion_letter};
 use super::square::Square;
 
 /// Error returned when text is not a legal move in UCI notation.
@@ -42,13 +41,12 @@ impl Board {
         let (squares, promotion) = match text.len() {
             4 => (text, None),
             5 => {
-                let promotion = match text.as_bytes()[4] {
-                    b'n' => PieceType::Knight,
-                    b'b' => PieceType::Bishop,
-                    b'r' => PieceType::Rook,
-                    b'q' => PieceType::Queen,
-                    _ => return Err(malformed()),
-                };
+                let promotion = Move::PROMOTION_PIECES
+                    .into_iter()
+                    .find(|&piece_type| {
+                        promotion_letter(piece_type) == char::from(text.as_bytes()[4])
+                    })
+                    .ok_or_else(malformed)?;
                 (&text[..4], Some(promotion))
             }
             _ => return Err(malformed()),
@@ -65,14 +63,7 @@ impl Board {
         self.legal_moves()
             .iter()
             .copied()
-            .find(|mv| {
-                let mv_to = if mv.is_castling() {
-                    mv.castling_king_target()
-                } else {
-                    mv.to()
-                };
-                mv.from() == from && mv_to == to && mv.promotion() == promotion
-            })
+            .find(|mv| mv.from() == from && mv.destination() == to && mv.promotion() == promotion)
             .ok_or_else(|| ParseMoveError::Illegal(text.to_owned()))
     }
 }

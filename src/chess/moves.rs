@@ -40,20 +40,21 @@ impl Kind {
     const CAPTURE_BIT: u8 = 0b0100;
     const PROMOTION_BIT: u8 = 0b1000;
 
-    /// Every kind that promotes, by promotion piece from knight to queen, with or without a
-    /// capture.
-    pub(super) const fn promotion(piece_type: PieceType, capture: bool) -> Self {
-        match (piece_type, capture) {
-            (PieceType::Knight, false) => Self::KnightPromotion,
-            (PieceType::Bishop, false) => Self::BishopPromotion,
-            (PieceType::Rook, false) => Self::RookPromotion,
-            (PieceType::Knight, true) => Self::KnightPromotionCapture,
-            (PieceType::Bishop, true) => Self::BishopPromotionCapture,
-            (PieceType::Rook, true) => Self::RookPromotionCapture,
-            (_, false) => Self::QueenPromotion,
-            (_, true) => Self::QueenPromotionCapture,
-        }
-    }
+    /// The promotions without a capture, in generation order: queen first.
+    pub(super) const PROMOTIONS: [Self; 4] = [
+        Self::QueenPromotion,
+        Self::KnightPromotion,
+        Self::RookPromotion,
+        Self::BishopPromotion,
+    ];
+
+    /// The promotions with a capture, in the same order as [`Kind::PROMOTIONS`].
+    pub(super) const PROMOTION_CAPTURES: [Self; 4] = [
+        Self::QueenPromotionCapture,
+        Self::KnightPromotionCapture,
+        Self::RookPromotionCapture,
+        Self::BishopPromotionCapture,
+    ];
 
     const fn from_bits(bits: u8) -> Option<Self> {
         Some(match bits {
@@ -75,21 +76,32 @@ impl Kind {
     }
 }
 
+/// Bits of a [`Move`] holding one square.
+const SQUARE_MASK: u16 = 0x3F;
+/// Position of the target square in a [`Move`].
+const TO_SHIFT: u16 = 6;
+/// Position of the [`Kind`] in a [`Move`].
+const KIND_SHIFT: u16 = 12;
+
+/// Files the king and rook land on when castling: (king, rook).
+const KING_SIDE_FILES: (u8, u8) = (6, 5);
+const QUEEN_SIDE_FILES: (u8, u8) = (2, 3);
+
 impl Move {
     /// The null move, which passes the turn. It is written `0000` in UCI.
     pub const NULL: Self = Self(0);
 
-    /// The promotion pieces, in the order moves are generated.
-    pub(super) const PROMOTIONS: [PieceType; 4] = [
-        PieceType::Queen,
+    /// The pieces a pawn may promote to.
+    pub(super) const PROMOTION_PIECES: [PieceType; 4] = [
         PieceType::Knight,
-        PieceType::Rook,
         PieceType::Bishop,
+        PieceType::Rook,
+        PieceType::Queen,
     ];
 
     /// Packs a move. Castling moves go from the king to its own rook.
     pub(super) const fn new(from: Square, to: Square, kind: Kind) -> Self {
-        Self(from.index() as u16 | (to.index() as u16) << 6 | (kind as u16) << 12)
+        Self(from.index() as u16 | (to.index() as u16) << TO_SHIFT | (kind as u16) << KIND_SHIFT)
     }
 
     /// Unpacks raw bits, for tests that try every possible encoding.
@@ -101,13 +113,13 @@ impl Move {
     /// The square the moving piece starts on.
     #[must_use]
     pub const fn from(self) -> Square {
-        Square::ALL[(self.0 & 0x3F) as usize]
+        Square::ALL[(self.0 & SQUARE_MASK) as usize]
     }
 
     /// The square the moving piece lands on, or for castling the castling rook's square.
     #[must_use]
     pub const fn to(self) -> Square {
-        Square::ALL[(self.0 >> 6 & 0x3F) as usize]
+        Square::ALL[(self.0 >> TO_SHIFT & SQUARE_MASK) as usize]
     }
 
     /// The kind of the move, or `None` for the four unused kind codes.
@@ -116,7 +128,7 @@ impl Move {
     }
 
     const fn kind_bits(self) -> u8 {
-        (self.0 >> 12) as u8
+        (self.0 >> KIND_SHIFT) as u8
     }
 
     /// Reports whether this is the null move.
@@ -165,24 +177,58 @@ impl Move {
         self.kind_bits() & (Kind::CAPTURE_BIT | Kind::PROMOTION_BIT) != 0
     }
 
+    /// The square the moving piece lands on; for castling, the king's landing square.
+    ///
+    /// This is the target square UCI notation writes.
+    pub(super) const fn destination(self) -> Square {
+        if self.is_castling() {
+            self.castling_king_target()
+        } else {
+            self.to()
+        }
+    }
+
+    /// The square of the piece the move captures: the target square, or for en passant
+    /// the square of the pawn that just moved, beside the capturing pawn.
+    pub(super) const fn captured_square(self) -> Square {
+        if self.is_en_passant() {
+            Square::ALL[self.from().rank() as usize * 8 + self.to().file() as usize]
+        } else {
+            self.to()
+        }
+    }
+
     /// The square the king lands on when castling, on the c- or g-file of its rank.
     pub(super) const fn castling_king_target(self) -> Square {
-        let file = if self.to().file() > self.from().file() {
-            6
-        } else {
-            2
-        };
-        Square::ALL[self.from().rank() as usize * 8 + file]
+        self.castling_square(self.castling_files().0)
     }
 
     /// The square the rook lands on when castling, on the d- or f-file of its rank.
     pub(super) const fn castling_rook_target(self) -> Square {
-        let file = if self.to().file() > self.from().file() {
-            5
+        self.castling_square(self.castling_files().1)
+    }
+
+    const fn castling_files(self) -> (u8, u8) {
+        if self.to().file() > self.from().file() {
+            KING_SIDE_FILES
         } else {
-            3
-        };
-        Square::ALL[self.from().rank() as usize * 8 + file]
+            QUEEN_SIDE_FILES
+        }
+    }
+
+    const fn castling_square(self, file: u8) -> Square {
+        Square::ALL[self.from().rank() as usize * 8 + file as usize]
+    }
+}
+
+/// The letter UCI notation uses for promoting to `piece_type`.
+pub(super) const fn promotion_letter(piece_type: PieceType) -> char {
+    match piece_type {
+        PieceType::Knight => 'n',
+        PieceType::Bishop => 'b',
+        PieceType::Rook => 'r',
+        PieceType::Queen => 'q',
+        PieceType::Pawn | PieceType::King => panic!("pawns promote to N, B, R or Q only"),
     }
 }
 
@@ -194,20 +240,9 @@ impl fmt::Display for Move {
         if self.is_null() {
             return f.write_str("0000");
         }
-        let to = if self.is_castling() {
-            self.castling_king_target()
-        } else {
-            self.to()
-        };
-        write!(f, "{}{to}", self.from())?;
+        write!(f, "{}{}", self.from(), self.destination())?;
         if let Some(piece_type) = self.promotion() {
-            let letter = match piece_type {
-                PieceType::Knight => 'n',
-                PieceType::Bishop => 'b',
-                PieceType::Rook => 'r',
-                _ => 'q',
-            };
-            write!(f, "{letter}")?;
+            write!(f, "{}", promotion_letter(piece_type))?;
         }
         Ok(())
     }

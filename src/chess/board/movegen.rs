@@ -10,7 +10,7 @@ use crate::chess::square::Square;
 
 /// Which moves a generation pass produces.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Moves {
+enum Selection {
     /// Every pseudo-legal move.
     All,
     /// Only captures and promotions.
@@ -24,14 +24,14 @@ impl Board {
     /// Filter with [`Board::is_legal`], or use [`Board::legal_moves`].
     #[must_use]
     pub fn pseudo_legal_moves(&self) -> MoveList {
-        self.generate(Moves::All)
+        self.generate(Selection::All)
     }
 
     /// Generates the pseudo-legal noisy moves: captures, including en passant, and
     /// promotions.
     #[must_use]
     pub fn noisy_moves(&self) -> MoveList {
-        self.generate(Moves::Noisy)
+        self.generate(Selection::Noisy)
     }
 
     /// Generates every legal move.
@@ -74,11 +74,7 @@ impl Board {
             return !self.is_attacked(to, them, without_king);
         }
 
-        let captured = if mv.is_en_passant() {
-            to.forward(them, 1)
-        } else {
-            to
-        };
+        let captured = mv.captured_square();
         let after = (occupied & !Bitboard::from_square(from) & !Bitboard::from_square(captured))
             | Bitboard::from_square(to);
         let attackers = self.attackers_to(self.king(us), after)
@@ -151,16 +147,16 @@ impl Board {
         }
     }
 
-    fn generate(&self, moves: Moves) -> MoveList {
+    fn generate(&self, selection: Selection) -> MoveList {
         let mut list = MoveList::new();
         let us = self.side_to_move;
         let them = self.colour(!us);
-        let targets = match moves {
-            Moves::All => !self.colour(us),
-            Moves::Noisy => them,
+        let targets = match selection {
+            Selection::All => !self.colour(us),
+            Selection::Noisy => them,
         };
 
-        self.generate_pawn_moves(&mut list, moves);
+        self.generate_pawn_moves(&mut list, selection);
         let occupied = self.occupied();
         for piece_type in [
             PieceType::Knight,
@@ -181,7 +177,7 @@ impl Board {
             }
         }
 
-        if moves == Moves::All {
+        if selection == Selection::All {
             for side in CastlingSide::ALL {
                 if let Some(rook) = self.castling.rook(us, side) {
                     let mv = Move::new(self.king(us), rook, Kind::Castling);
@@ -194,7 +190,7 @@ impl Board {
         list
     }
 
-    fn generate_pawn_moves(&self, list: &mut MoveList, moves: Moves) {
+    fn generate_pawn_moves(&self, list: &mut MoveList, selection: Selection) {
         let us = self.side_to_move;
         let them = self.colour(!us);
         let empty = !self.occupied();
@@ -204,9 +200,9 @@ impl Board {
 
         let single = pawns.forward(us) & empty;
         for to in single & last_rank {
-            push_promotions(list, to.forward(!us, 1), to, false);
+            push_promotions(list, to.forward(!us, 1), to, Kind::PROMOTIONS);
         }
-        if moves == Moves::All {
+        if selection == Selection::All {
             for to in single & !last_rank {
                 list.push(Move::new(to.forward(!us, 1), to, Kind::Quiet));
             }
@@ -218,7 +214,7 @@ impl Board {
         for from in pawns {
             for to in attacks::pawn(us, from) & them {
                 if last_rank.contains(to) {
-                    push_promotions(list, from, to, true);
+                    push_promotions(list, from, to, Kind::PROMOTION_CAPTURES);
                 } else {
                     list.push(Move::new(from, to, Kind::Capture));
                 }
@@ -244,9 +240,9 @@ impl Board {
 }
 
 /// Adds the four promotions of a pawn moving from `from` to `to`.
-fn push_promotions(list: &mut MoveList, from: Square, to: Square, capture: bool) {
-    for piece_type in Move::PROMOTIONS {
-        list.push(Move::new(from, to, Kind::promotion(piece_type, capture)));
+fn push_promotions(list: &mut MoveList, from: Square, to: Square, kinds: [Kind; 4]) {
+    for kind in kinds {
+        list.push(Move::new(from, to, kind));
     }
 }
 

@@ -160,3 +160,18 @@ fn a_pinned_knight_has_pseudo_legal_moves_but_no_legal_ones() {
     assert_eq!(from_e2(&board.pseudo_legal_moves()), 6);
     assert_eq!(from_e2(&board.legal_moves()), 0);
 }
+
+#[test]
+fn a_double_push_records_the_same_position_as_its_fen() {
+    let after_e4 = Board::startpos().make(Board::startpos().parse_move("e2e4").expect("legal"));
+    let parsed = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1")
+        .expect("valid FEN");
+    assert_eq!(after_e4, parsed);
+}
+
+#[test]
+fn in_check_reports_whether_the_side_to_move_is_attacked() {
+    assert!(!Board::startpos().in_check());
+    let checked = Board::from_fen("4k3/8/8/8/8/8/8/4K2r w - - 0 1").expect("valid FEN");
+    assert!(checked.in_check());
+}
