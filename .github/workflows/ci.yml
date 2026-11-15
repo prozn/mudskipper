@@ -35,3 +35,29 @@ jobs:
         run: |
           command -v make || choco install make --no-progress
           make EXE=mudskipper-ci
+
+  # Checks the Bench signature in the head commit message. Runs on Windows too, so the
+  # two platforms must agree with the commit and therefore with each other.
+  bench:
+    name: bench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      # A pull request's default checkout is a merge commit; check the branch head, whose
+      # message carries the `Bench:` line.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install toolchain
+        run: rustup toolchain install
+      - name: Build
+        run: cargo build --release --locked
+      - name: Check Bench signature
+        shell: bash
+        run: |
+          engine=target/release/mudskipper
+          [[ -f $engine.exe ]] && engine=$engine.exe
+          .github/scripts/check-bench.sh "$engine"

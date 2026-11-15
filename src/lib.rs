@@ -3,4 +3,5 @@
 pub mod chess;
 pub mod eval;
 pub mod search;
+pub mod tools;
 pub mod uci;
