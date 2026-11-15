@@ -1,0 +1,159 @@
+//! The board: piece placement plus the rest of the game state that FEN records.
+
+mod fen;
+
+pub use fen::ParseFenError;
+
+use super::bitboard::Bitboard;
+use super::castling::CastlingRights;
+use super::piece::{Colour, Piece, PieceType};
+use super::square::Square;
+use super::zobrist;
+
+/// FEN of the standard start position.
+const STARTPOS_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+/// A chess position.
+///
+/// Pieces are held twice, as bitboards for set operations and as a mailbox for lookup by
+/// square, and the two always agree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Board {
+    mailbox: [Option<Piece>; 64],
+    pieces: [Bitboard; 6],
+    colours: [Bitboard; 2],
+    side_to_move: Colour,
+    castling: CastlingRights,
+    en_passant: Option<Square>,
+    halfmove_clock: u16,
+    fullmove_number: u16,
+    key: u64,
+}
+
+impl Board {
+    /// Returns the standard start position.
+    #[must_use]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "parsing the constant start FEN cannot fail"
+    )]
+    pub fn startpos() -> Self {
+        Self::from_fen(STARTPOS_FEN).expect("the start position FEN is valid")
+    }
+
+    /// Piece standing on `square`, if any.
+    #[must_use]
+    pub const fn piece_at(&self, square: Square) -> Option<Piece> {
+        self.mailbox[square.index()]
+    }
+
+    /// Squares holding a piece of type `piece_type` belonging to `colour`.
+    #[must_use]
+    pub fn pieces(&self, colour: Colour, piece_type: PieceType) -> Bitboard {
+        self.colours[colour.index()] & self.pieces[piece_type.index()]
+    }
+
+    /// The side whose turn it is.
+    #[must_use]
+    pub const fn side_to_move(&self) -> Colour {
+        self.side_to_move
+    }
+
+    /// The castling rights still held by each colour.
+    #[must_use]
+    pub const fn castling_rights(&self) -> CastlingRights {
+        self.castling
+    }
+
+    /// The square a pawn may capture onto en passant, as recorded after a double push.
+    #[must_use]
+    pub const fn en_passant(&self) -> Option<Square> {
+        self.en_passant
+    }
+
+    /// Number of halfmoves since the last capture or pawn move.
+    #[must_use]
+    pub const fn halfmove_clock(&self) -> u16 {
+        self.halfmove_clock
+    }
+
+    /// Number of the current full move, starting at 1 and increasing after black moves.
+    #[must_use]
+    pub const fn fullmove_number(&self) -> u16 {
+        self.fullmove_number
+    }
+
+    /// Zobrist key of the position.
+    ///
+    /// The key covers piece placement, side to move, castling rights and the en passant
+    /// file when a pawn stands ready to capture en passant, but not the move clocks.
+    #[must_use]
+    pub const fn key(&self) -> u64 {
+        self.key
+    }
+
+    /// Computes the Zobrist key from the rest of the position.
+    fn compute_key(&self) -> u64 {
+        let mut key = 0;
+        for square in Square::ALL {
+            if let Some(piece) = self.mailbox[square.index()] {
+                key ^= zobrist::piece(piece, square);
+            }
+        }
+        if self.side_to_move == Colour::Black {
+            key ^= zobrist::black_to_move();
+        }
+        key ^= zobrist::castling_rights(self.castling);
+        if let Some(square) = self.en_passant
+            && self.can_capture_en_passant(square)
+        {
+            key ^= zobrist::en_passant(square.file());
+        }
+        key
+    }
+
+    /// Reports whether a pawn of the side to move stands beside the pawn that skipped
+    /// `target`, ignoring pins.
+    ///
+    /// Only then does the en passant square change which moves are available, so only then
+    /// is it part of the key.
+    fn can_capture_en_passant(&self, target: Square) -> bool {
+        let capturer_rank = match self.side_to_move {
+            Colour::White => target.rank() - 1,
+            Colour::Black => target.rank() + 1,
+        };
+        let pawns = self.pieces(self.side_to_move, PieceType::Pawn);
+        [target.file().checked_sub(1), target.file().checked_add(1)]
+            .into_iter()
+            .flatten()
+            .filter_map(|file| Square::from_coords(file, capturer_rank))
+            .any(|square| pawns.contains(square))
+    }
+
+    /// An empty board with white to move and no rights.
+    const fn empty() -> Self {
+        Self {
+            mailbox: [None; 64],
+            pieces: [Bitboard::EMPTY; 6],
+            colours: [Bitboard::EMPTY; 2],
+            side_to_move: Colour::White,
+            castling: CastlingRights::EMPTY,
+            en_passant: None,
+            halfmove_clock: 0,
+            fullmove_number: 1,
+            key: 0,
+        }
+    }
+
+    /// Places `piece` on the empty `square`.
+    fn put_piece(&mut self, piece: Piece, square: Square) {
+        debug_assert!(
+            self.mailbox[square.index()].is_none(),
+            "{square} is already occupied"
+        );
+        let bb = Bitboard::from_square(square);
+        self.mailbox[square.index()] = Some(piece);
+        self.pieces[piece.piece_type().index()] ^= bb;
+        self.colours[piece.colour().index()] ^= bb;
+    }
+}
