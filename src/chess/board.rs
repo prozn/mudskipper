@@ -9,7 +9,7 @@ pub use fen::ParseFenError;
 use super::attacks;
 use super::bitboard::Bitboard;
 use super::castling::CastlingRights;
-use super::piece::{Colour, Piece, PieceType};
+use super::piece::{Colour, EN_PASSANT_CAPTURER_RANK, Piece, PieceType};
 use super::square::Square;
 use super::zobrist;
 
@@ -121,7 +121,7 @@ impl Board {
     /// Only then does the en passant square change which moves are available, so only then
     /// is it part of the key.
     fn can_capture_en_passant(&self, target: Square) -> bool {
-        let capturer_rank = self.side_to_move.relative_rank(4);
+        let capturer_rank = self.side_to_move.relative_rank(EN_PASSANT_CAPTURER_RANK);
         let pawns = self.pieces(self.side_to_move, PieceType::Pawn);
         [target.file().checked_sub(1), target.file().checked_add(1)]
             .into_iter()

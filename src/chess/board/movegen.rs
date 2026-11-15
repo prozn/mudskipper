@@ -5,7 +5,7 @@ use crate::chess::attacks;
 use crate::chess::bitboard::Bitboard;
 use crate::chess::castling::CastlingSide;
 use crate::chess::moves::{Kind, Move, MoveList};
-use crate::chess::piece::PieceType;
+use crate::chess::piece::{DOUBLE_PUSH_SKIPPED_RANK, PAWN_START_RANK, PROMOTION_RANK, PieceType};
 use crate::chess::square::Square;
 
 /// Which moves a generation pass produces.
@@ -131,12 +131,12 @@ impl Board {
             return self.en_passant == Some(to) && attacks.contains(to);
         }
         if kind == Kind::DoublePush {
-            return from.relative_rank(us) == 1
+            return from.relative_rank(us) == PAWN_START_RANK
                 && to == from.forward(us, 2)
                 && self.piece_at(from.forward(us, 1)).is_none()
                 && !captures;
         }
-        let promotes = to.relative_rank(us) == 7;
+        let promotes = to.relative_rank(us) == PROMOTION_RANK;
         if promotes != mv.promotion().is_some() {
             return false;
         }
@@ -195,8 +195,8 @@ impl Board {
         let them = self.colour(!us);
         let empty = !self.occupied();
         let pawns = self.pieces(us, PieceType::Pawn);
-        let last_rank = Bitboard::rank(us.relative_rank(7));
-        let third_rank = Bitboard::rank(us.relative_rank(2));
+        let last_rank = Bitboard::rank(us.relative_rank(PROMOTION_RANK));
+        let skipped_rank = Bitboard::rank(us.relative_rank(DOUBLE_PUSH_SKIPPED_RANK));
 
         let single = pawns.forward(us) & empty;
         for to in single & last_rank {
@@ -206,7 +206,7 @@ impl Board {
             for to in single & !last_rank {
                 list.push(Move::new(to.forward(!us, 1), to, Kind::Quiet));
             }
-            for to in (single & third_rank).forward(us) & empty {
+            for to in (single & skipped_rank).forward(us) & empty {
                 list.push(Move::new(to.forward(!us, 2), to, Kind::DoublePush));
             }
         }

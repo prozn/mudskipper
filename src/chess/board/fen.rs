@@ -6,7 +6,9 @@ use std::str::FromStr;
 
 use super::Board;
 use crate::chess::castling::{CastlingRights, CastlingSide};
-use crate::chess::piece::{Colour, Piece, PieceType};
+use crate::chess::piece::{
+    Colour, DOUBLE_PUSH_RANK, DOUBLE_PUSH_SKIPPED_RANK, PAWN_START_RANK, Piece, PieceType,
+};
 use crate::chess::square::Square;
 
 /// Error returned when text is not a valid FEN position.
@@ -342,9 +344,9 @@ fn parse_en_passant(board: &Board, field: &str) -> Result<Option<Square>, ParseF
     // skipping `square`.
     let pusher = !board.side_to_move;
     let (target_rank, pawn_rank, origin_rank) = (
-        pusher.relative_rank(2),
-        pusher.relative_rank(3),
-        pusher.relative_rank(1),
+        pusher.relative_rank(DOUBLE_PUSH_SKIPPED_RANK),
+        pusher.relative_rank(DOUBLE_PUSH_RANK),
+        pusher.relative_rank(PAWN_START_RANK),
     );
     if square.rank() != target_rank {
         return Err(invalid());

@@ -1,7 +1,7 @@
 //! Making moves by copying the board (ADR-0003).
 
 use super::Board;
-use crate::chess::moves::Move;
+use crate::chess::moves::{Kind, Move};
 use crate::chess::piece::{Colour, Piece, PieceType};
 use crate::chess::zobrist;
 
@@ -64,9 +64,7 @@ impl Board {
             board.fullmove_number += 1;
         }
 
-        let double_push =
-            piece.piece_type() == PieceType::Pawn && from.rank().abs_diff(to.rank()) == 2;
-        if double_push {
+        if mv.kind() == Some(Kind::DoublePush) {
             let target = from.forward(us, 1);
             board.en_passant = Some(target);
             if board.can_capture_en_passant(target) {

@@ -216,6 +216,21 @@ fn illegal_move_keeps_the_previous_position() {
 }
 
 #[test]
+fn go_perft_zero_counts_the_position_itself() {
+    let mut engine = Engine::start();
+    engine.send("go perft 0");
+    engine.expect_line("Nodes searched: 1");
+}
+
+#[test]
+fn go_perft_in_checkmate_counts_no_nodes() {
+    let mut engine = Engine::start();
+    engine.send("position startpos moves f2f3 e7e5 g2g4 d8h4");
+    engine.send("go perft 1");
+    engine.expect_line("Nodes searched: 0");
+}
+
+#[test]
 fn malformed_go_perft_gets_an_info_string() {
     let mut engine = Engine::start();
     for command in ["go perft", "go perft x", "go perft -1"] {

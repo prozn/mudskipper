@@ -97,8 +97,9 @@ fn write_split_perft(output: &mut impl Write, board: &Board, depth: u32) -> io::
     for (mv, nodes) in &split {
         writeln!(output, "{mv}: {nodes}")?;
     }
-    let total: u64 = if depth == 0 {
-        1
+    // With no moves to sum over (depth 0, or no legal moves), perft is cheap.
+    let total = if split.is_empty() {
+        board.perft(depth)
     } else {
         split.iter().map(|&(_, nodes)| nodes).sum()
     };

@@ -3,6 +3,17 @@
 use std::fmt;
 use std::ops::Not;
 
+/// Rank a pawn starts on, counted from its own side as [`Colour::relative_rank`] does.
+pub(super) const PAWN_START_RANK: u8 = 1;
+/// Rank a pawn's double push skips, which becomes the en passant square.
+pub(super) const DOUBLE_PUSH_SKIPPED_RANK: u8 = 2;
+/// Rank a pawn lands on after a double push.
+pub(super) const DOUBLE_PUSH_RANK: u8 = 3;
+/// Rank a pawn must stand on to capture en passant.
+pub(super) const EN_PASSANT_CAPTURER_RANK: u8 = 4;
+/// Rank a pawn promotes on.
+pub(super) const PROMOTION_RANK: u8 = 7;
+
 /// The side a piece belongs to, or the side to move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Colour {

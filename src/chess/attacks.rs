@@ -164,7 +164,11 @@ struct Magic {
 
 impl Magic {
     fn index(self, occupied: Bitboard) -> usize {
-        let blockers = occupied.bits() & self.mask;
+        self.index_of_blockers(occupied.bits() & self.mask)
+    }
+
+    /// Table index for `blockers`, which must lie within the mask.
+    const fn index_of_blockers(self, blockers: u64) -> usize {
         self.offset + (blockers.wrapping_mul(self.number) >> self.shift) as usize
     }
 }
@@ -211,7 +215,7 @@ const fn slider_table<const N: usize>(
         let magic = magics[square];
         let mut subset: u64 = 0;
         loop {
-            let index = magic.offset + (subset.wrapping_mul(magic.number) >> magic.shift) as usize;
+            let index = magic.index_of_blockers(subset);
             let attacks = slide(square, subset, directions);
             assert!(
                 !filled[index] || table[index].bits() == attacks,
