@@ -10,6 +10,11 @@ use crate::search::{Limits, StopFlag, Worker};
 /// release build takes a few seconds.
 pub const DEFAULT_DEPTH: u32 = 5;
 
+/// Hash size in MB that Bench gives each position, so that the **Bench signature** does
+/// not depend on the `Hash` option.
+#[expect(dead_code, reason = "used once the transposition table exists")]
+const HASH_MB: usize = 16;
+
 /// The positions Bench searches: openings, middlegames, endgames and some **Chess960**
 /// positions. Changing them changes the **Bench signature**.
 const POSITIONS: [&str; 50] = [
@@ -76,7 +81,7 @@ const POSITIONS: [&str; 50] = [
 /// between positions: each position is searched by a fresh [`Worker`] with no time or
 /// node limit, so nothing learned from one position carries over to the next and the
 /// node count depends only on the code, never on timing or the platform. There is no
-/// hash table yet; when one arrives, each position must get a fresh 16 MB table.
+/// hash table yet; when one arrives, each position must get a fresh `HASH_MB` table.
 ///
 /// # Errors
 ///
@@ -110,7 +115,7 @@ pub fn run(depth: u32, output: &mut impl Write) -> io::Result<()> {
         )?;
     }
     let micros = elapsed.as_micros().max(1);
-    let nps = u64::try_from(u128::from(total_nodes) * 1_000_000 / micros).unwrap_or(u64::MAX);
+    let nps = (u128::from(total_nodes) * 1_000_000 / micros) as u64;
     writeln!(output)?;
     writeln!(output, "{total_nodes} nodes {nps} nps")
 }
