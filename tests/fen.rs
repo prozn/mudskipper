@@ -56,90 +56,83 @@ fn parsing_the_start_fen_gives_the_start_position() {
     assert_eq!(Board::from_fen(STARTPOS), Ok(Board::startpos()));
 }
 
-/// Asserts that `fen` is rejected with an error satisfying `is_expected`.
-fn assert_rejected(fen: &str, what: &str, is_expected: impl Fn(&ParseFenError) -> bool) {
+/// Parses `fen`, which should fail, and returns the error.
+fn rejection(fen: &str) -> ParseFenError {
     match Board::from_fen(fen) {
-        Ok(board) => panic!("{fen:?} should be rejected ({what}) but parsed as {board:?}"),
-        Err(err) => assert!(
-            is_expected(&err),
-            "{fen:?} should fail with {what}, got {err:?}"
+        Ok(board) => panic!(
+            "{fen:?} should be rejected but parsed as {:?}",
+            board.to_fen()
         ),
+        Err(err) => err,
     }
 }
 
 #[test]
 fn fen_with_too_few_or_too_many_fields_is_rejected() {
-    assert_rejected("", "no fields", |e| {
-        *e == ParseFenError::TooFewFields { found: 0 }
-    });
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq",
-        "three fields",
-        |e| *e == ParseFenError::TooFewFields { found: 3 },
+    // No fields.
+    assert_eq!(rejection(""), ParseFenError::TooFewFields { found: 0 });
+    // Three fields.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq"),
+        ParseFenError::TooFewFields { found: 3 }
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 extra",
-        "seven fields",
-        |e| *e == ParseFenError::TooManyFields { found: 7 },
+    // Seven fields.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 extra"),
+        ParseFenError::TooManyFields { found: 7 }
     );
 }
 
 #[test]
 fn fen_with_bad_ranks_is_rejected() {
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        "seven ranks",
-        |e| *e == ParseFenError::WrongRankCount { found: 7 },
+    // Seven ranks.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        ParseFenError::WrongRankCount { found: 7 }
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        "nine ranks",
-        |e| *e == ParseFenError::WrongRankCount { found: 9 },
+    // Nine ranks.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        ParseFenError::WrongRankCount { found: 9 }
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/7/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        "a short sixth rank",
-        |e| {
-            *e == ParseFenError::WrongRankLength {
-                rank: 6,
-                squares: 7,
-            }
-        },
+    // A short sixth rank.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/7/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        ParseFenError::WrongRankLength {
+            rank: 6,
+            squares: 7,
+        }
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        "a long second rank",
-        |e| {
-            *e == ParseFenError::WrongRankLength {
-                rank: 2,
-                squares: 9,
-            }
-        },
+    // A long second rank.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        ParseFenError::WrongRankLength {
+            rank: 2,
+            squares: 9,
+        }
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR8 w KQkq - 0 1",
-        "a far too long first rank",
-        |e| {
-            *e == ParseFenError::WrongRankLength {
-                rank: 1,
-                squares: 16,
-            }
-        },
+    // A far too long first rank.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR8 w KQkq - 0 1"),
+        ParseFenError::WrongRankLength {
+            rank: 1,
+            squares: 16,
+        }
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/44/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        "two empty runs in a row",
-        |e| *e == ParseFenError::SplitEmptyRun { rank: 4 },
+    // Two empty runs in a row.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/44/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        ParseFenError::SplitEmptyRun { rank: 4 }
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/3x4/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        "an unknown piece letter",
-        |e| *e == ParseFenError::InvalidPiece { found: 'x' },
+    // An unknown piece letter.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/3x4/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        ParseFenError::InvalidPiece { found: 'x' }
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/08/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        "a zero run",
-        |e| *e == ParseFenError::InvalidPiece { found: '0' },
+    // A zero run.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/08/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        ParseFenError::InvalidPiece { found: '0' }
     );
 }
 
@@ -147,30 +140,28 @@ fn fen_with_bad_ranks_is_rejected() {
 fn fen_describing_an_impossible_position_is_rejected() {
     let err = Board::from_fen("8/8/8/8/8/8/8/4K3 w - - 0 1").expect_err("no black king");
     assert_eq!(err.to_string(), "black has 0 kings, need exactly 1");
-    assert_rejected(
-        "rnbq1bnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQ - 0 1",
-        "a missing black king",
-        |e| {
-            *e == ParseFenError::WrongKingCount {
-                colour: Colour::Black,
-                found: 0,
-            }
-        },
+    // A missing black king.
+    assert_eq!(
+        rejection("rnbq1bnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQ - 0 1"),
+        ParseFenError::WrongKingCount {
+            colour: Colour::Black,
+            found: 0,
+        }
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBKKBNR w kq - 0 1",
-        "two white kings",
-        |e| {
-            *e == ParseFenError::WrongKingCount {
-                colour: Colour::White,
-                found: 2,
-            }
-        },
+    // Two white kings.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBKKBNR w kq - 0 1"),
+        ParseFenError::WrongKingCount {
+            colour: Colour::White,
+            found: 2,
+        }
     );
-    assert_rejected(
-        "4k2P/8/8/8/8/8/8/4K3 w - - 0 1",
-        "a pawn on the eighth rank",
-        |e| matches!(e, ParseFenError::PawnOnBackRank { square } if square.to_string() == "h8"),
+    // A pawn on the eighth rank.
+    assert_eq!(
+        rejection("4k2P/8/8/8/8/8/8/4K3 w - - 0 1"),
+        ParseFenError::PawnOnBackRank {
+            square: "h8".parse().expect("h8 is a square")
+        }
     );
 }
 
@@ -178,9 +169,11 @@ fn fen_describing_an_impossible_position_is_rejected() {
 fn fen_with_bad_side_to_move_is_rejected() {
     for side in ["x", "W", "white"] {
         let fen = format!("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR {side} KQkq - 0 1");
-        assert_rejected(&fen, "a bad side to move", |e| {
-            *e == ParseFenError::InvalidSideToMove(side.to_owned())
-        });
+        assert_eq!(
+            rejection(&fen),
+            ParseFenError::InvalidSideToMove(side.to_owned()),
+            "{fen:?}"
+        );
     }
 }
 
@@ -211,9 +204,11 @@ fn fen_with_bad_castling_is_rejected() {
         ),
     ];
     for (fen, field) in cases {
-        assert_rejected(fen, "bad castling", |e| {
-            *e == ParseFenError::InvalidCastling(field.to_owned())
-        });
+        assert_eq!(
+            rejection(fen),
+            ParseFenError::InvalidCastling(field.to_owned()),
+            "{fen:?}"
+        );
     }
 }
 
@@ -246,42 +241,44 @@ fn fen_with_bad_en_passant_is_rejected() {
         ),
     ];
     for (fen, field) in cases {
-        assert_rejected(fen, "bad en passant", |e| {
-            *e == ParseFenError::InvalidEnPassant(field.to_owned())
-        });
+        assert_eq!(
+            rejection(fen),
+            ParseFenError::InvalidEnPassant(field.to_owned()),
+            "{fen:?}"
+        );
     }
 }
 
 #[test]
 fn fen_with_bad_clocks_is_rejected() {
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - -1 1",
-        "a negative halfmove clock",
-        |e| *e == ParseFenError::InvalidHalfmoveClock("-1".to_owned()),
+    // A negative halfmove clock.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - -1 1"),
+        ParseFenError::InvalidHalfmoveClock("-1".to_owned())
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 one",
-        "a non-numeric fullmove number",
-        |e| *e == ParseFenError::InvalidFullmoveNumber("one".to_owned()),
+    // A non-numeric fullmove number.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 one"),
+        ParseFenError::InvalidFullmoveNumber("one".to_owned())
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - +5 1",
-        "a signed halfmove clock",
-        |e| *e == ParseFenError::InvalidHalfmoveClock("+5".to_owned()),
+    // A signed halfmove clock.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - +5 1"),
+        ParseFenError::InvalidHalfmoveClock("+5".to_owned())
     );
 }
 
 #[test]
 fn non_ascii_fen_is_rejected_without_panicking() {
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq é3 0 1",
-        "a non-ASCII en passant field",
-        |e| matches!(e, ParseFenError::InvalidEnPassant(_)),
+    // A non-ASCII en passant field.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq é3 0 1"),
+        ParseFenError::InvalidEnPassant("é3".to_owned())
     );
-    assert_rejected(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - ٣ 1",
-        "a non-ASCII digit clock",
-        |e| matches!(e, ParseFenError::InvalidHalfmoveClock(_)),
+    // A non-ASCII digit clock.
+    assert_eq!(
+        rejection("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - ٣ 1"),
+        ParseFenError::InvalidHalfmoveClock("٣".to_owned())
     );
 }
 
