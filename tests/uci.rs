@@ -149,6 +149,10 @@ fn malformed_position_commands_get_info_strings() {
         "position fen",
         "position somewhere",
         "position startpos extra",
+        "position startpos moves e2e5",
+        "position startpos moves e2e4 e2e4",
+        "position startpos moves e1g1",
+        "position startpos moves e2",
     ] {
         engine.send(command);
         let reply = engine.expect_info_string();
@@ -161,4 +165,67 @@ fn malformed_position_commands_get_info_strings() {
         engine.is_running(),
         "engine exited after a malformed command"
     );
+}
+
+#[test]
+fn position_with_moves_then_go_perft_reports_the_total() {
+    let mut engine = Engine::start();
+    engine.send("position startpos moves e2e4 e7e5");
+    engine.send("go perft 3");
+    // Reference counts from python-chess.
+    let before = engine.expect_line("Nodes searched: 24825");
+    assert!(
+        before.iter().any(|line| line == "g1f3: 779"),
+        "split counts should list each root move: {before:?}"
+    );
+}
+
+#[test]
+fn position_with_moves_then_d_reports_the_resulting_fen() {
+    let mut engine = Engine::start();
+    engine.send("position startpos moves e2e4 c7c5 g1f3");
+    assert_eq!(
+        reported_fen(&mut engine),
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2"
+    );
+}
+
+#[test]
+fn castling_and_promotion_moves_are_read_in_standard_notation() {
+    let mut engine = Engine::start();
+    engine.send("position fen r3k2r/1P6/8/8/8/8/8/R3K2R w KQkq - 0 1 moves e1c1 e8g8 b7a8n");
+    // Expected FEN from python-chess.
+    assert_eq!(
+        reported_fen(&mut engine),
+        "N4rk1/8/8/8/8/8/8/2KR3R b - - 0 2"
+    );
+}
+
+#[test]
+fn illegal_move_keeps_the_previous_position() {
+    let fen = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
+    let mut engine = Engine::start();
+    engine.send(&format!("position fen {fen}"));
+    engine.send("position startpos moves e2e4 e7e5 e1e3");
+    let reply = engine.expect_info_string();
+    assert!(
+        reply.contains("e1e3"),
+        "reply should name the move: {reply:?}"
+    );
+    assert_eq!(reported_fen(&mut engine), fen);
+}
+
+#[test]
+fn malformed_go_perft_gets_an_info_string() {
+    let mut engine = Engine::start();
+    for command in ["go perft", "go perft x", "go perft -1"] {
+        engine.send(command);
+        let reply = engine.expect_info_string();
+        assert!(
+            reply.contains("perft"),
+            "{command:?} should be reported as a bad perft command: {reply:?}"
+        );
+    }
+    engine.send("isready");
+    engine.expect_line("readyok");
 }

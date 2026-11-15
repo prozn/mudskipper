@@ -3,7 +3,7 @@
 use std::fmt;
 use std::io::{self, BufRead, Write};
 
-use crate::chess::{Board, ParseFenError, Piece, Square};
+use crate::chess::{Board, ParseFenError, ParseMoveError, Piece, Square};
 
 /// Engine name reported in reply to `uci`.
 const NAME: &str = concat!("Mudskipper ", env!("CARGO_PKG_VERSION"));
@@ -44,6 +44,7 @@ pub fn run(mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
                 Ok(new_board) => board = new_board,
                 Err(err) => writeln!(output, "info string invalid position: {err}")?,
             },
+            Some("go") => go(&mut output, &board, line)?,
             Some("d") => write_board(&mut output, &board)?,
             Some("quit") => break,
             Some(_) => writeln!(output, "info string unknown command: {}", line.trim())?,
@@ -67,10 +68,42 @@ fn parse_position(line: &str) -> Result<Board, PositionError> {
         ["fen", fen @ ..] => Board::from_fen(&fen.join(" ")).map_err(PositionError::Fen)?,
         [other, ..] => return Err(PositionError::UnknownSetup((*other).to_owned())),
     };
-    if !moves.is_empty() {
-        return Err(PositionError::MovesUnsupported);
+    moves.iter().try_fold(board, |board, text| {
+        let mv = board.parse_move(text).map_err(PositionError::Move)?;
+        Ok(board.make(mv))
+    })
+}
+
+/// Handles a `go` command. Only `go perft <depth>` is supported so far.
+fn go(output: &mut impl Write, board: &Board, line: &str) -> io::Result<()> {
+    let args: Vec<&str> = line.split_whitespace().skip(1).collect();
+    match args.as_slice() {
+        ["perft", depth] => match depth.parse::<u32>() {
+            Ok(depth) => write_split_perft(output, board, depth),
+            Err(_) => writeln!(output, "info string invalid perft depth {depth:?}"),
+        },
+        ["perft", ..] => writeln!(output, "info string expected go perft <depth>"),
+        _ => writeln!(
+            output,
+            "info string unsupported go command: {}",
+            line.trim()
+        ),
     }
-    Ok(board)
+}
+
+/// Writes the reply to `go perft`: the count below each legal move, then the total.
+fn write_split_perft(output: &mut impl Write, board: &Board, depth: u32) -> io::Result<()> {
+    let split = board.split_perft(depth);
+    for (mv, nodes) in &split {
+        writeln!(output, "{mv}: {nodes}")?;
+    }
+    let total: u64 = if depth == 0 {
+        1
+    } else {
+        split.iter().map(|&(_, nodes)| nodes).sum()
+    };
+    writeln!(output)?;
+    writeln!(output, "Nodes searched: {total}")
 }
 
 /// Why a `position` command was rejected.
@@ -84,8 +117,8 @@ enum PositionError {
     Trailing(String),
     /// The FEN was malformed.
     Fen(ParseFenError),
-    /// A move list was given, which is not supported yet.
-    MovesUnsupported,
+    /// A move in the move list was malformed or illegal.
+    Move(ParseMoveError),
 }
 
 impl fmt::Display for PositionError {
@@ -95,7 +128,7 @@ impl fmt::Display for PositionError {
             Self::UnknownSetup(setup) => write!(f, "expected startpos or fen, got {setup:?}"),
             Self::Trailing(extra) => write!(f, "unexpected {extra:?} after startpos"),
             Self::Fen(err) => write!(f, "{err}"),
-            Self::MovesUnsupported => f.write_str("moves are not supported yet"),
+            Self::Move(err) => write!(f, "{err}"),
         }
     }
 }

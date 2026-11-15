@@ -12,6 +12,13 @@ publish = false
 # No runtime dependencies (ADR-0005).
 [dependencies]
 
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "movegen"
+harness = false
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

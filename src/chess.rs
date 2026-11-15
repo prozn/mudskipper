@@ -2,9 +2,13 @@
 //!
 //! This module never depends on the rest of the engine.
 
+mod attacks;
 mod bitboard;
 mod board;
 mod castling;
+mod moves;
+mod notation;
+mod perft;
 mod piece;
 mod square;
 mod zobrist;
@@ -12,5 +16,7 @@ mod zobrist;
 pub use bitboard::{Bitboard, Squares};
 pub use board::{Board, ParseFenError};
 pub use castling::{CastlingRights, CastlingSide};
+pub use moves::{Move, MoveList};
+pub use notation::ParseMoveError;
 pub use piece::{Colour, Piece, PieceType};
 pub use square::{ParseSquareError, Square};

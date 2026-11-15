@@ -53,6 +53,20 @@ impl CastlingRights {
         self.rooks[colour.index()][side.index()] = Some(rook);
     }
 
+    /// Removes the right to castle with the rook starting on `square`, if there is one.
+    pub(super) fn revoke(&mut self, square: Square) {
+        for right in self.rooks.iter_mut().flatten() {
+            if *right == Some(square) {
+                *right = None;
+            }
+        }
+    }
+
+    /// Removes both of `colour`'s castling rights.
+    pub(super) fn revoke_all(&mut self, colour: Colour) {
+        self.rooks[colour.index()] = [None; 2];
+    }
+
     /// Starting squares of every rook that may still castle.
     pub(super) fn squares(self) -> impl Iterator<Item = Square> {
         self.rooks.into_iter().flatten().flatten()

@@ -21,6 +21,24 @@ impl Colour {
     pub const fn index(self) -> usize {
         self as usize
     }
+
+    /// Converts between absolute ranks and ranks counted from this colour's side.
+    ///
+    /// Rank 0 is this colour's back rank and rank 7 the opponent's. The conversion is its
+    /// own inverse, so it maps a relative rank to an absolute one and back.
+    #[must_use]
+    pub const fn relative_rank(self, rank: u8) -> u8 {
+        match self {
+            Self::White => rank,
+            Self::Black => 7 - rank,
+        }
+    }
+
+    /// The absolute rank this colour's pieces start on: 0 for white, 7 for black.
+    #[must_use]
+    pub const fn back_rank(self) -> u8 {
+        self.relative_rank(0)
+    }
 }
 
 impl fmt::Display for Colour {
