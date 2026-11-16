@@ -16,7 +16,7 @@ use crate::eval;
 use crate::search::{Report, Score, StopFlag, Worker};
 
 use go::{Go, SearchPlan, parse_go};
-use options::Options;
+use options::{Applied, Options};
 
 /// Engine name reported in reply to `uci`.
 const NAME: &str = concat!("Mudskipper ", env!("CARGO_PKG_VERSION"));
@@ -268,15 +268,14 @@ impl Engine {
             }
             Some("isready") => writeln!(output, "readyok")?,
             Some("ucinewgame") => {
-                // A fresh worker forgets whatever earlier searches taught it.
                 self.game = Game::startpos();
-                *self.worker.lock().expect("worker lock poisoned") = Worker::new(self.stop.clone());
+                self.reset_search_state();
             }
-            Some("setoption") => {
-                if let Err(err) = self.options.set(line) {
-                    writeln!(output, "info string invalid setoption: {err}")?;
-                }
-            }
+            Some("setoption") => match self.options.set(line) {
+                Ok(Applied::Stored) => {}
+                Ok(Applied::ClearHash) => self.reset_search_state(),
+                Err(err) => writeln!(output, "info string invalid setoption: {err}")?,
+            },
             Some("position") => match parse_position(line, notation) {
                 Ok(game) => self.game = game,
                 Err(err) => writeln!(output, "info string invalid position: {err}")?,
@@ -304,6 +303,15 @@ impl Engine {
             Some(_) => writeln!(output, "info string unknown command: {}", line.trim())?,
         }
         Ok(())
+    }
+
+    /// Makes the next search forget whatever earlier searches taught it, keeping the
+    /// position and the options. Both `ucinewgame` and `Clear Hash` come here, so that
+    /// state added later, such as a transposition table, is cleared by both.
+    ///
+    /// Only called while no search is running, so the worker lock is free.
+    fn reset_search_state(&mut self) {
+        *self.worker.lock().expect("worker lock poisoned") = Worker::new(self.stop.clone());
     }
 
     /// Starts searching the current position on a new thread as `plan` says. An infinite

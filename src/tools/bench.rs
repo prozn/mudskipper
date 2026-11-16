@@ -77,11 +77,11 @@ const POSITIONS: [&str; 50] = [
 /// Searches every Bench position to `depth`, writing one line per position to `output`
 /// and then the final line `<nodes> nodes <nps> nps`.
 ///
-/// Bench runs on one thread with a 16 MB hash, and clears the hash and the histories
-/// between positions: each position is searched by a fresh [`Worker`] with no time or
-/// node limit, so nothing learned from one position carries over to the next and the
-/// node count depends only on the code, never on timing or the platform. There is no
-/// hash table yet; when one arrives, each position must get a fresh `HASH_MB` table.
+/// Bench runs on one thread. Each position is searched by a fresh [`Worker`] with no
+/// limit other than `depth`, so nothing learned from one position carries over to the
+/// next and the node count depends only on the code, never on timing or the platform.
+/// Once there is a transposition table, each position must also get a fresh table of
+/// `HASH_MB` megabytes, whatever the `Hash` option says.
 ///
 /// # Errors
 ///

@@ -617,6 +617,23 @@ fn go_depth_without_legal_moves_returns_bestmove_0000() {
 }
 
 #[test]
+fn search_deeper_than_depth_1_does_not_stalemate_a_winning_position() {
+    let mut engine = Engine::start();
+    // Qa1-f6 stalemates Black. Quiescence doesn't detect stalemate when not in check, so
+    // `go depth 1` may play it; from depth 2 the main search must see the draw.
+    engine.send("position fen 8/8/8/7k/8/5K2/8/Q7 w - - 0 1");
+    for limits in ["depth 2", "movetime 100"] {
+        let reply = search(&mut engine, limits);
+        assert_ne!(
+            best_move(&reply),
+            "a1f6",
+            "go {limits} stalemated Black; lines: {:?}",
+            reply.before
+        );
+    }
+}
+
+#[test]
 fn fen_with_the_side_not_to_move_in_check_is_rejected_and_search_survives() {
     let mut engine = Engine::start();
     engine.send("position fen 4k3/8/8/8/8/8/8/K3R3 w - - 0 1");
@@ -945,6 +962,25 @@ fn go_with_only_the_other_sides_clock_searches_until_stop() {
     );
     engine.send("stop");
     engine.read_line_matching("a bestmove line", |line| line.starts_with("bestmove "));
+}
+
+#[test]
+fn clear_hash_while_idle_keeps_the_position_and_search_still_works() {
+    let mut engine = Engine::start();
+    let fen = "8/8/8/7k/8/5K2/8/Q7 w - - 0 1";
+    engine.send(&format!("position fen {fen}"));
+    engine.send("setoption name Clear Hash");
+    assert_eq!(
+        reported_fen(&mut engine),
+        fen,
+        "Clear Hash changed the position"
+    );
+    let reply = search(&mut engine, "depth 1");
+    assert!(
+        reply.line.starts_with("bestmove ") && reply.line != "bestmove 0000",
+        "no move after Clear Hash: {:?}",
+        reply.line
+    );
 }
 
 #[test]

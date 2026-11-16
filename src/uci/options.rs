@@ -98,11 +98,12 @@ impl Options {
         writeln!(output, "option name {CLEAR_HASH} type button")
     }
 
-    /// Applies a `setoption` command.
+    /// Applies a `setoption` command, and says whether the caller has more to do.
     ///
-    /// Option names are matched ignoring case, as the UCI protocol asks. `Clear Hash` has
-    /// nothing to clear until there is a transposition table. On error no option changes.
-    pub fn set(&mut self, line: &str) -> Result<(), SetOptionError> {
+    /// Option names are matched ignoring case, as the UCI protocol asks. `Clear Hash`
+    /// changes no option: it returns [`Applied::ClearHash`] so that the caller, which owns
+    /// the search state, resets it. On error no option changes.
+    pub fn set(&mut self, line: &str) -> Result<Applied, SetOptionError> {
         let args: Vec<&str> = line.split_whitespace().skip(1).collect();
         let Some((&"name", rest)) = args.split_first() else {
             return Err(SetOptionError::MissingName);
@@ -135,11 +136,22 @@ impl Options {
             if let Some(value) = value {
                 return Err(SetOptionError::UnexpectedValue(value.to_owned()));
             }
+            return Ok(Applied::ClearHash);
         } else {
             return Err(SetOptionError::UnknownOption(name));
         }
-        Ok(())
+        Ok(Applied::Stored)
     }
+}
+
+/// What a successful `setoption` did.
+#[must_use = "Clear Hash does nothing unless the caller resets the search state"]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Applied {
+    /// An option's new value was stored.
+    Stored,
+    /// The `Clear Hash` button was pressed: the caller must reset the search state.
+    ClearHash,
 }
 
 /// Why a `setoption` command was rejected.
