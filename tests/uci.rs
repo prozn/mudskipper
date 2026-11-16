@@ -694,12 +694,24 @@ fn go_searchmoves_is_ignored_with_an_info_string() {
 #[test]
 fn go_drops_an_invalid_value_with_an_info_string_and_keeps_the_other_limits() {
     let mut engine = Engine::start();
-    let sent = Instant::now();
-    search_ignoring(&mut engine, "depth abc movetime 50", "depth");
-    let elapsed = sent.elapsed();
+    let legal = perft_moves(&mut engine);
+    let (reply, elapsed) = timed_search(&mut engine, "depth abc movetime 200");
     assert!(
-        elapsed < Duration::from_millis(100),
-        "go depth abc movetime 50 took {elapsed:?}"
+        reply
+            .before
+            .iter()
+            .any(|line| line.starts_with("info string") && line.contains("depth")),
+        "the invalid depth should get an info string: {:?}",
+        reply.before
+    );
+    let best = best_move(&reply);
+    assert!(
+        legal.iter().any(|mv| mv == best),
+        "bestmove {best} is not legal"
+    );
+    assert!(
+        (Duration::from_millis(150)..Duration::from_millis(250)).contains(&elapsed),
+        "go depth abc movetime 200 took {elapsed:?}"
     );
 }
 

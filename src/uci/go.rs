@@ -53,6 +53,41 @@ impl SearchRequest {
         &mut self.clocks[colour.index()]
     }
 
+    /// Sets `parameter` to `value`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GoError::InvalidValue`] if `value` is missing or invalid, leaving the
+    /// request unchanged.
+    fn set(&mut self, parameter: Parameter, value: &str) -> Result<(), GoError> {
+        let name = parameter.name();
+        match parameter {
+            Parameter::Depth => self.limits.depth = Some(parse_count(name, value)?),
+            Parameter::Nodes => self.limits.nodes = Some(parse_count(name, value)?),
+            Parameter::MoveTime => self.movetime = Some(parse_millis(name, value)?),
+            Parameter::WhiteTime => {
+                self.clock_mut(Colour::White).time = Some(parse_millis(name, value)?);
+            }
+            Parameter::BlackTime => {
+                self.clock_mut(Colour::Black).time = Some(parse_millis(name, value)?);
+            }
+            Parameter::WhiteIncrement => {
+                self.clock_mut(Colour::White).increment = Some(parse_millis(name, value)?);
+            }
+            Parameter::BlackIncrement => {
+                self.clock_mut(Colour::Black).increment = Some(parse_millis(name, value)?);
+            }
+            Parameter::MovesToGo => {
+                let moves = parse_count(name, value).ok().filter(|&n| n > 0);
+                self.moves_to_go = Some(moves.ok_or_else(|| GoError::InvalidValue {
+                    parameter: name,
+                    value: value.to_owned(),
+                })?);
+            }
+        }
+        Ok(())
+    }
+
     /// The plan for a search with `side` to move, keeping `overhead` back from the time to
     /// move.
     ///
@@ -120,12 +155,12 @@ pub(super) fn parse_go(line: &str) -> Result<Go, GoError> {
     while let Some(name) = args.next() {
         if name == "infinite" {
             request.infinite = true;
-        } else if VALUED_PARAMETERS.contains(&name) {
+        } else if let Some(parameter) = Parameter::from_name(name) {
             // With no value before the next parameter, the value is missing.
             let value = args
                 .next_if(|&next| !is_parameter(next))
                 .unwrap_or_default();
-            if let Err(err) = request.set(name, value) {
+            if let Err(err) = request.set(parameter, value) {
                 ignored.push(err);
             }
         } else {
@@ -135,46 +170,57 @@ pub(super) fn parse_go(line: &str) -> Result<Go, GoError> {
     Ok(Go::Search { request, ignored })
 }
 
-/// The `go` parameters this engine supports that take a value.
-const VALUED_PARAMETERS: [&str; 8] = [
-    "depth",
-    "nodes",
-    "movetime",
-    "wtime",
-    "btime",
-    "winc",
-    "binc",
-    "movestogo",
-];
+/// A `go` parameter this engine supports that takes a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Parameter {
+    Depth,
+    Nodes,
+    MoveTime,
+    WhiteTime,
+    BlackTime,
+    WhiteIncrement,
+    BlackIncrement,
+    MovesToGo,
+}
+
+impl Parameter {
+    /// Every parameter, for looking one up by name.
+    const ALL: [Self; 8] = [
+        Self::Depth,
+        Self::Nodes,
+        Self::MoveTime,
+        Self::WhiteTime,
+        Self::BlackTime,
+        Self::WhiteIncrement,
+        Self::BlackIncrement,
+        Self::MovesToGo,
+    ];
+
+    /// The parameter named `name`, if this engine supports it.
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|parameter| parameter.name() == name)
+    }
+
+    /// The parameter's name in a `go` command.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Depth => "depth",
+            Self::Nodes => "nodes",
+            Self::MoveTime => "movetime",
+            Self::WhiteTime => "wtime",
+            Self::BlackTime => "btime",
+            Self::WhiteIncrement => "winc",
+            Self::BlackIncrement => "binc",
+            Self::MovesToGo => "movestogo",
+        }
+    }
+}
 
 /// Reports whether `word` names a `go` parameter this engine supports.
 fn is_parameter(word: &str) -> bool {
-    word == "infinite" || VALUED_PARAMETERS.contains(&word)
-}
-
-impl SearchRequest {
-    /// Sets the parameter `name`, one of [`VALUED_PARAMETERS`], to `value`, or says why it
-    /// could not.
-    fn set(&mut self, name: &str, value: &str) -> Result<(), GoError> {
-        match name {
-            "depth" => self.limits.depth = Some(parse_count("depth", value)?),
-            "nodes" => self.limits.nodes = Some(parse_count("nodes", value)?),
-            "movetime" => self.movetime = Some(parse_millis("movetime", value)?),
-            "wtime" => self.clock_mut(Colour::White).time = Some(parse_millis("wtime", value)?),
-            "btime" => self.clock_mut(Colour::Black).time = Some(parse_millis("btime", value)?),
-            "winc" => self.clock_mut(Colour::White).increment = Some(parse_millis("winc", value)?),
-            "binc" => self.clock_mut(Colour::Black).increment = Some(parse_millis("binc", value)?),
-            "movestogo" => {
-                let moves = parse_count("movestogo", value).ok().filter(|&n| n > 0);
-                self.moves_to_go = Some(moves.ok_or_else(|| GoError::InvalidValue {
-                    parameter: "movestogo",
-                    value: value.to_owned(),
-                })?);
-            }
-            other => return Err(GoError::Unsupported(other.to_owned())),
-        }
-        Ok(())
-    }
+    word == "infinite" || Parameter::from_name(word).is_some()
 }
 
 /// Parses `value`, the value given for the `go` parameter `parameter`, as a count.

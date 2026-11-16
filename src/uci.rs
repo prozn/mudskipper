@@ -312,12 +312,14 @@ impl Engine {
     /// iteration.
     fn start_search(&mut self, plan: SearchPlan) -> io::Result<()> {
         let SearchPlan { limits, infinite } = plan;
-        let wait_for_stop = infinite && self.shutdown == Shutdown::No;
-        if infinite && !wait_for_stop {
+        // Once input has ended, no `stop` can come to end an infinite search.
+        let input_ended = self.shutdown != Shutdown::No;
+        if infinite && input_ended {
             self.stop.raise();
         } else {
             self.stop.lower();
         }
+        let wait_for_stop = infinite && !input_ended;
         let worker = Arc::clone(&self.worker);
         let game = self.game.clone();
         let notation = self.options.mode.castling_notation();
