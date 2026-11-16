@@ -20,6 +20,31 @@ pub(super) const fn mated_in(ply: usize) -> i32 {
     -MATE + ply as i32
 }
 
+/// Converts `score`, found `ply` plies from the root, to the form the transposition table
+/// stores: a mate score counts plies from the position itself rather than from the root,
+/// so that it stays right when the position is reached at another ply.
+pub(super) const fn to_table(score: i32, ply: usize) -> i32 {
+    if score >= MATE_BOUND {
+        score + ply as i32
+    } else if score <= -MATE_BOUND {
+        score - ply as i32
+    } else {
+        score
+    }
+}
+
+/// Converts a score read from the transposition table back to one relative to the root,
+/// for the position found `ply` plies from it. The inverse of [`to_table`].
+pub(super) const fn from_table(score: i32, ply: usize) -> i32 {
+    if score >= MATE_BOUND {
+        score - ply as i32
+    } else if score <= -MATE_BOUND {
+        score + ply as i32
+    } else {
+        score
+    }
+}
+
 /// A search score as UCI reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Score {

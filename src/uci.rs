@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 
 use crate::chess::{Board, CastlingNotation, Game, ParseFenError, ParseMoveError, Piece, Square};
 use crate::eval;
-use crate::search::{Report, Score, StopFlag, Worker};
+use crate::search::{Report, Score, StopFlag, TranspositionTable, Worker};
 
 use go::{Go, SearchPlan, parse_go};
 use options::{Applied, Options};
@@ -137,6 +137,8 @@ struct Engine {
     /// so the lock is never contended. It lets the worker stay put rather than travel to
     /// the search thread and back.
     worker: Arc<Mutex<Worker>>,
+    /// The transposition table, shared with the worker, sized by the `Hash` option.
+    tt: TranspositionTable,
     /// The running search, if any.
     search: Option<Search>,
     stop: StopFlag,
@@ -162,10 +164,13 @@ impl Engine {
     /// Returns an engine in the start position, idle, sending search output to `events`.
     fn new(events: Sender<Event>) -> Self {
         let stop = StopFlag::new();
+        let options = Options::new();
+        let tt = TranspositionTable::new(options.hash_mb as usize);
         Self {
             game: Game::startpos(),
-            options: Options::new(),
-            worker: Arc::new(Mutex::new(Worker::new(stop.clone()))),
+            options,
+            worker: Arc::new(Mutex::new(Worker::new(stop.clone(), tt.clone()))),
+            tt,
             search: None,
             stop,
             events,
@@ -274,6 +279,7 @@ impl Engine {
             Some("setoption") => match self.options.set(line) {
                 Ok(Applied::Stored) => {}
                 Ok(Applied::ClearHash) => self.reset_search_state(),
+                Ok(Applied::ResizeHash) => self.resize_transposition_table(),
                 Err(err) => writeln!(output, "info string invalid setoption: {err}")?,
             },
             Some("position") => match parse_position(line, notation) {
@@ -307,11 +313,27 @@ impl Engine {
 
     /// Makes the next search forget whatever earlier searches taught it, keeping the
     /// position and the options. Both `ucinewgame` and `Clear Hash` come here, so that
-    /// state added later, such as a transposition table, is cleared by both.
+    /// both clear the transposition table and every other piece of search state.
     ///
     /// Only called while no search is running, so the worker lock is free.
     fn reset_search_state(&mut self) {
-        *self.worker.lock().expect("worker lock poisoned") = Worker::new(self.stop.clone());
+        self.tt.clear();
+        self.replace_worker();
+    }
+
+    /// Replaces the transposition table with an empty one of the size the `Hash` option
+    /// now gives, which also resets the rest of the search state.
+    ///
+    /// Only called while no search is running, so the worker lock is free.
+    fn resize_transposition_table(&mut self) {
+        self.tt = TranspositionTable::new(self.options.hash_mb as usize);
+        self.replace_worker();
+    }
+
+    /// Gives the engine a fresh worker sharing the current transposition table.
+    fn replace_worker(&mut self) {
+        *self.worker.lock().expect("worker lock poisoned") =
+            Worker::new(self.stop.clone(), self.tt.clone());
     }
 
     /// Starts searching the current position on a new thread as `plan` says. An infinite
@@ -396,11 +418,12 @@ fn info_line(report: &Report<'_>, notation: CastlingNotation) -> String {
         Score::Mate(moves) => format!("mate {moves}"),
     };
     let mut line = format!(
-        "info depth {} seldepth {} score {score} nodes {} nps {nps} time {} hashfull 0 pv",
+        "info depth {} seldepth {} score {score} nodes {} nps {nps} time {} hashfull {} pv",
         report.depth,
         report.seldepth,
         report.nodes,
         report.elapsed.as_millis(),
+        report.hashfull,
     );
     for mv in report.pv {
         write!(line, " {}", mv.display(notation)).expect("writing to a String cannot fail");

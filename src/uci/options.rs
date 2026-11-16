@@ -30,7 +30,7 @@ impl Spin {
     }
 }
 
-/// Size of the transposition table in megabytes. There is no transposition table yet.
+/// Size of the transposition table in megabytes.
 const HASH: Spin = Spin {
     name: "Hash",
     default: 16,
@@ -68,7 +68,7 @@ pub(super) struct Options {
     pub mode: Mode,
     /// The time kept back from every move's time budget.
     pub move_overhead: Duration,
-    /// The transposition table size in megabytes, kept for when there is one.
+    /// The transposition table size in megabytes.
     pub hash_mb: u32,
     /// The number of search threads asked for, kept for when more than one can be used.
     pub threads: u32,
@@ -102,7 +102,8 @@ impl Options {
     ///
     /// Option names are matched ignoring case, as the UCI protocol asks. `Clear Hash`
     /// changes no option: it returns [`Applied::ClearHash`] so that the caller, which owns
-    /// the search state, resets it. On error no option changes.
+    /// the search state, resets it. Likewise a new `Hash` returns [`Applied::ResizeHash`]
+    /// so that the caller resizes the table. On error no option changes.
     pub fn set(&mut self, line: &str) -> Result<Applied, SetOptionError> {
         let args: Vec<&str> = line.split_whitespace().skip(1).collect();
         let Some((&"name", rest)) = args.split_first() else {
@@ -128,6 +129,7 @@ impl Options {
             };
         } else if is(HASH.name) {
             self.hash_mb = HASH.parse(value)?;
+            return Ok(Applied::ResizeHash);
         } else if is(THREADS.name) {
             self.threads = THREADS.parse(value)?;
         } else if is(MOVE_OVERHEAD.name) {
@@ -145,13 +147,15 @@ impl Options {
 }
 
 /// What a successful `setoption` did.
-#[must_use = "Clear Hash does nothing unless the caller resets the search state"]
+#[must_use = "Clear Hash and Hash do nothing unless the caller acts on them"]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Applied {
     /// An option's new value was stored.
     Stored,
     /// The `Clear Hash` button was pressed: the caller must reset the search state.
     ClearHash,
+    /// `Hash` was set: the caller must resize the transposition table to the new size.
+    ResizeHash,
 }
 
 /// Why a `setoption` command was rejected.

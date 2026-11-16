@@ -1,5 +1,5 @@
-//! Move ordering: captures by most valuable victim, least valuable attacker, then
-//! quiet moves in generation order.
+//! Move ordering: the transposition table's move, then captures by most valuable victim,
+//! least valuable attacker, then quiet moves in generation order.
 
 use crate::chess::{Board, Move, MoveList, PieceType};
 
@@ -9,6 +9,9 @@ const ORDER_VALUES: [i32; 6] = [100, 300, 300, 500, 900, 0];
 /// How much more the victim's value counts than the attacker's, so that any capture of a
 /// more valuable piece comes before every capture of a less valuable one.
 const VICTIM_WEIGHT: i32 = 10;
+
+/// The ordering score of the transposition table's move, above every other move's.
+const TT_MOVE_SCORE: i32 = i32::MAX;
 
 /// Moves handed out best first, choosing the next one only when it is asked for, so a
 /// cutoff skips sorting the rest.
@@ -20,13 +23,17 @@ pub(super) struct OrderedMoves {
 }
 
 impl OrderedMoves {
-    /// Scores `list` for ordering in `board`.
-    pub(super) fn new(board: &Board, list: &MoveList) -> Self {
+    /// Scores `list` for ordering in `board`, putting `tt_move` first if it is in `list`.
+    pub(super) fn new(board: &Board, list: &MoveList, tt_move: Option<Move>) -> Self {
         let mut moves = [Move::NULL; MoveList::CAPACITY];
         let mut scores = [0; MoveList::CAPACITY];
         for (i, &mv) in list.iter().enumerate() {
             moves[i] = mv;
-            scores[i] = score(board, mv);
+            scores[i] = if Some(mv) == tt_move {
+                TT_MOVE_SCORE
+            } else {
+                score(board, mv)
+            };
         }
         Self {
             moves,
