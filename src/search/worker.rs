@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use super::MAX_PLY;
-use super::ordering::OrderedMoves;
+use super::ordering::MovePicker;
 use super::score::{self, DRAW, INFINITY, Score};
 use super::stop::StopFlag;
 use super::time::TimeLimit;
@@ -207,7 +207,7 @@ impl Worker {
         let mut best = -INFINITY;
         let mut best_move = None;
         let mut legal_moves = 0;
-        for mv in OrderedMoves::new(board, &board.pseudo_legal_moves(), tt_move) {
+        for mv in MovePicker::new(board, tt_move) {
             if !board.is_legal(mv) {
                 continue;
             }
@@ -295,8 +295,9 @@ impl Worker {
         let in_check = board.in_check();
         let mut best = -INFINITY;
         let mut eval = None;
+        let tt_move = tt_move(board, tt_entry);
         let moves = if in_check {
-            board.pseudo_legal_moves()
+            MovePicker::new(board, tt_move)
         } else {
             let static_eval = tt_entry
                 .and_then(|entry| entry.eval)
@@ -318,12 +319,12 @@ impl Worker {
                 return best;
             }
             alpha = alpha.max(best);
-            board.noisy_moves()
+            MovePicker::noisy(board, tt_move)
         };
 
         let mut best_move = None;
         let mut legal_moves = 0;
-        for mv in OrderedMoves::new(board, &moves, tt_move(board, tt_entry)) {
+        for mv in moves {
             if !board.is_legal(mv) {
                 continue;
             }

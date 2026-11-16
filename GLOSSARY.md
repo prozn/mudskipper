@@ -60,3 +60,11 @@ _Avoid_: Culling, cutting (ambiguous with a beta cutoff)
 **Reduction**:
 Searching a move, or a whole node, to a shallower depth than usual because it is unlikely to matter. A move reduced below its siblings' depth is searched again at full depth if it turns out better than expected.
 _Avoid_: Culling, pruning (a reduced move is still searched)
+
+**Noisy move**:
+A capture, including en passant, or a promotion, whether or not the promotion captures. These are the moves searched until a position is quiet.
+_Avoid_: Tactical move, forcing move (suggests checks), capture (leaves out non-capturing promotions)
+
+**Quiet move**:
+A move that neither captures nor promotes, including castling. Every move is either a **Noisy move** or a quiet one.
+_Avoid_: Non-capture (includes non-capturing promotions), silent move
