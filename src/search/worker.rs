@@ -25,6 +25,18 @@ const CHECK_INTERVAL: u64 = 1024;
 /// engines at a similar stage. Lowering it reduces more nodes, trading accuracy for depth.
 const IIR_MIN_DEPTH: u32 = 4;
 
+/// Shallowest iteration that searches the root inside an aspiration window rather than
+/// with the full window, the threshold common among open-source engines at a similar
+/// stage. Shallower iterations' scores swing too much between depths to aim at; lowering
+/// it risks more re-searches, raising it searches more iterations with the full window.
+const ASPIRATION_MIN_DEPTH: u32 = 4;
+
+/// Half the width of the first aspiration window, in centipawns, within the range of 10
+/// to 25 common among open-source engines at a similar stage. The window grows by half
+/// each time the score falls outside it. A narrower window cuts off more of the tree but
+/// misses more often, each miss costing a re-search.
+const ASPIRATION_DELTA: i32 = 20;
+
 /// When a search stops. A search with no limits runs to the deepest supported depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
@@ -141,14 +153,16 @@ impl Worker {
             .depth
             .map_or(MAX_DEPTH, |depth| depth.clamp(1, MAX_DEPTH));
         let mut completed: Option<Iteration> = None;
+        let mut previous_score = None;
         for depth in 1..=max_depth {
             if self.interruptible && (self.stop.is_raised() || self.soft_time_is_up()) {
                 break;
             }
-            let score = self.negamax(board, depth, 0, -INFINITY, INFINITY, Node::Pv);
+            let score = self.search_root(board, depth, previous_score);
             if self.stopped {
                 break;
             }
+            previous_score = Some(score);
             let iteration = Iteration {
                 depth,
                 seldepth: self.seldepth,
@@ -168,8 +182,46 @@ impl Worker {
         Some(best_move)
     }
 
+    /// Searches the root `board` to `depth` plies and returns its exact score, unless the
+    /// search stops first.
+    ///
+    /// From [`ASPIRATION_MIN_DEPTH`] on, the search starts with a narrow window around
+    /// `previous`, the score of the iteration before. Each time the score falls outside
+    /// the window, the window is widened on that side and the root searched again, until
+    /// the score lands inside it.
+    fn search_root(&mut self, board: &Board, depth: u32, previous: Option<i32>) -> i32 {
+        let mut delta = ASPIRATION_DELTA;
+        let (mut alpha, mut beta) = match previous {
+            Some(previous) if depth >= ASPIRATION_MIN_DEPTH => (
+                (previous - delta).max(-INFINITY),
+                (previous + delta).min(INFINITY),
+            ),
+            _ => (-INFINITY, INFINITY),
+        };
+        loop {
+            let score = self.negamax(board, depth, 0, alpha, beta, Node::Pv);
+            if self.stopped {
+                return score;
+            }
+            if score <= alpha {
+                beta = alpha.midpoint(beta);
+                alpha = (score - delta).max(-INFINITY);
+            } else if score >= beta {
+                beta = (score + delta).min(INFINITY);
+            } else {
+                return score;
+            }
+            delta += delta / 2;
+        }
+    }
+
     /// Searches `board`, `ply` plies from the root, to `depth` plies and returns its score
     /// within the window `alpha` to `beta`.
+    ///
+    /// After the first move, each move is searched with a null window just above `alpha`
+    /// (principal variation search). Only at a node on the principal variation, and only
+    /// when the score lands inside the window, is the move searched again with the full
+    /// window, to find its exact score.
     ///
     /// Off the principal variation, a transposition table entry at least `depth` deep
     /// whose bound settles the window is returned without searching.
@@ -228,14 +280,19 @@ impl Worker {
                 continue;
             }
             legal_moves += 1;
-            let child_node = if node == Node::Pv && legal_moves == 1 {
-                Node::Pv
-            } else {
-                Node::NonPv
-            };
             let child = board.make(mv);
             self.enter(board);
-            let score = -self.negamax(&child, depth - 1, ply + 1, -beta, -alpha, child_node);
+            let score = if legal_moves == 1 {
+                -self.negamax(&child, depth - 1, ply + 1, -beta, -alpha, node)
+            } else {
+                let score =
+                    -self.negamax(&child, depth - 1, ply + 1, -alpha - 1, -alpha, Node::NonPv);
+                if node == Node::Pv && score > alpha && score < beta && !self.stopped {
+                    -self.negamax(&child, depth - 1, ply + 1, -beta, -alpha, Node::Pv)
+                } else {
+                    score
+                }
+            };
             self.leave();
             if self.stopped {
                 return DRAW;
@@ -469,9 +526,10 @@ impl Worker {
     }
 }
 
-/// Whether a node lies on the principal variation: the root, and the first move searched
-/// from each node that does. Only nodes off it take transposition table cutoffs, so that
-/// the principal variation is searched rather than read back from the table.
+/// Whether a node lies on the principal variation: the root, the first move searched from
+/// each node that does, and any later move re-searched there with the full window. Only
+/// nodes off it take transposition table cutoffs, so that the principal variation is
+/// searched rather than read back from the table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Node {
     Pv,
