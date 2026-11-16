@@ -244,7 +244,15 @@ fn malformed_go_perft_gets_an_info_string() {
         );
     }
     engine.send("isready");
-    engine.expect_line("readyok");
+    let before = engine.expect_line("readyok");
+    let after = engine.lines_for(Duration::from_millis(100));
+    assert!(
+        !before
+            .iter()
+            .chain(&after)
+            .any(|line| line.starts_with("info depth ") || line.starts_with("bestmove")),
+        "a malformed go perft started a search: {before:?} then {after:?}"
+    );
 }
 
 #[test]
@@ -634,24 +642,65 @@ fn go_nodes_stops_near_the_node_limit_with_a_legal_bestmove() {
 }
 
 #[test]
-fn malformed_go_commands_get_info_strings() {
+fn bare_go_searches_until_stop_and_returns_a_legal_bestmove() {
     let mut engine = Engine::start();
-    for command in [
-        "go",
-        "go depth",
-        "go depth x",
-        "go nodes -5",
-        "go depth 3 sideways",
-    ] {
-        engine.send(command);
-        let reply = engine.expect_info_string();
-        assert!(
-            reply.contains("invalid go"),
-            "{command:?} should be reported as a bad go command: {reply:?}"
-        );
-    }
-    engine.send("isready");
-    engine.expect_line("readyok");
+    let legal = perft_moves(&mut engine);
+    engine.send("go");
+    engine.read_line_matching("an info depth line", |line| line.starts_with("info depth "));
+    engine.send("stop");
+    let reply = engine.read_line_matching("a bestmove line", |line| line.starts_with("bestmove "));
+    let best = best_move(&reply);
+    assert!(
+        legal.iter().any(|mv| mv == best),
+        "bestmove {best} is not legal"
+    );
+}
+
+/// Sends `go` with `params`, which the engine should partly ignore, and checks that it
+/// writes an `info string` naming `ignored` and still returns a legal `bestmove`.
+fn search_ignoring(engine: &mut Engine, params: &str, ignored: &str) -> Reply {
+    let legal = perft_moves(engine);
+    let reply = search(engine, params);
+    let info: Vec<&String> = reply
+        .before
+        .iter()
+        .filter(|line| line.starts_with("info string"))
+        .collect();
+    assert!(
+        info.iter().any(|line| line.contains(ignored)),
+        "go {params} should write an info string about {ignored:?}: {:?}",
+        reply.before
+    );
+    let best = best_move(&reply);
+    assert!(
+        legal.iter().any(|mv| mv == best),
+        "bestmove {best} after go {params} is not legal"
+    );
+    reply
+}
+
+#[test]
+fn go_ponder_is_ignored_with_an_info_string() {
+    let mut engine = Engine::start();
+    search_ignoring(&mut engine, "ponder wtime 1000 btime 1000", "ponder");
+}
+
+#[test]
+fn go_searchmoves_is_ignored_with_an_info_string() {
+    let mut engine = Engine::start();
+    search_ignoring(&mut engine, "searchmoves e2e4 depth 2", "searchmoves");
+}
+
+#[test]
+fn go_drops_an_invalid_value_with_an_info_string_and_keeps_the_other_limits() {
+    let mut engine = Engine::start();
+    let sent = Instant::now();
+    search_ignoring(&mut engine, "depth abc movetime 50", "depth");
+    let elapsed = sent.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "go depth abc movetime 50 took {elapsed:?}"
+    );
 }
 
 #[test]
@@ -765,6 +814,29 @@ fn quit_during_a_search_exits_cleanly() {
     assert!(status.success(), "engine exited with {status}");
 }
 
+#[test]
+fn go_infinite_queued_before_the_end_of_input_still_returns_a_bestmove_and_exits() {
+    let mut engine = Engine::start();
+    let legal = perft_moves(&mut engine);
+    engine.send("go depth 1");
+    engine.send("go infinite");
+    engine.close_stdin();
+    let lines = engine.read_to_end();
+    let bestmoves: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line.strip_prefix("bestmove "))
+        .collect();
+    assert_eq!(bestmoves.len(), 2, "expected two bestmove lines: {lines:?}");
+    for best in bestmoves {
+        assert!(
+            legal.iter().any(|mv| mv == best),
+            "bestmove {best} is not legal"
+        );
+    }
+    let status = engine.wait_exit();
+    assert!(status.success(), "engine exited with {status}");
+}
+
 /// Sends `go` with `limits` and returns the `bestmove` reply and how long it took.
 fn timed_search(engine: &mut Engine, limits: &str) -> (Reply, Duration) {
     let sent = Instant::now();
@@ -818,24 +890,31 @@ fn go_with_little_clock_time_never_exceeds_the_time_left_minus_move_overhead() {
 }
 
 #[test]
-fn malformed_clock_parameters_get_info_strings() {
+fn malformed_clock_parameters_are_dropped_with_info_strings() {
     let mut engine = Engine::start();
-    // White is to move, so a clock for Black alone says nothing about when to stop.
-    for command in [
-        "go wtime",
-        "go wtime -1",
-        "go btime 1000 binc x",
-        "go movestogo 0",
-        "go btime 1000",
-        "go winc 100 movestogo 10",
+    for (params, ignored) in [
+        ("wtime depth 1", "wtime"),
+        ("wtime -1 depth 1", "wtime"),
+        ("btime 1000 binc x depth 1", "binc"),
+        ("movestogo 0 depth 1", "movestogo"),
     ] {
-        engine.send(command);
-        let reply = engine.expect_info_string();
-        assert!(
-            reply.contains("invalid go"),
-            "{command:?} should be reported as a bad go command: {reply:?}"
-        );
+        search_ignoring(&mut engine, params, ignored);
     }
+}
+
+#[test]
+fn go_with_only_the_other_sides_clock_searches_until_stop() {
+    // White is to move, so a clock for Black alone says nothing about when to stop.
+    let mut engine = Engine::start();
+    engine.send("go btime 1000 binc 100");
+    engine.read_line_matching("an info depth line", |line| line.starts_with("info depth "));
+    let quiet = engine.lines_for(Duration::from_millis(1200));
+    assert!(
+        !quiet.iter().any(|line| line.starts_with("bestmove")),
+        "bestmove before stop: {quiet:?}"
+    );
+    engine.send("stop");
+    engine.read_line_matching("a bestmove line", |line| line.starts_with("bestmove "));
 }
 
 #[test]
