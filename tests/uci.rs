@@ -617,6 +617,24 @@ fn go_depth_without_legal_moves_returns_bestmove_0000() {
 }
 
 #[test]
+fn fen_with_the_side_not_to_move_in_check_is_rejected_and_search_survives() {
+    let mut engine = Engine::start();
+    engine.send("position fen 4k3/8/8/8/8/8/8/K3R3 w - - 0 1");
+    let reply = engine.expect_info_string();
+    assert!(
+        reply.contains("in check"),
+        "reply should explain the error: {reply:?}"
+    );
+    search(&mut engine, "depth 1");
+    engine.send("isready");
+    engine.expect_line("readyok");
+    engine.send("position fen 4k3/8/8/8/8/8/8/K3R3 b - - 0 1");
+    let reply = search(&mut engine, "depth 1");
+    assert_ne!(best_move(&reply), "0000", "black has legal moves");
+    assert!(engine.is_running(), "engine exited");
+}
+
+#[test]
 fn go_nodes_stops_near_the_node_limit_with_a_legal_bestmove() {
     let mut engine = Engine::start();
     let legal = perft_moves(&mut engine);

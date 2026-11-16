@@ -28,7 +28,7 @@ impl Board {
             board.key ^= zobrist::en_passant(target.file());
         }
         board.key ^= zobrist::castling_rights(board.castling);
-        board.halfmove_clock += 1;
+        board.halfmove_clock = board.halfmove_clock.saturating_add(1);
 
         let piece = if mv.is_castling() {
             let king = board.remove_piece(from);
@@ -61,7 +61,7 @@ impl Board {
         board.side_to_move = !us;
         board.key ^= zobrist::black_to_move();
         if us == Colour::Black {
-            board.fullmove_number += 1;
+            board.fullmove_number = board.fullmove_number.saturating_add(1);
         }
 
         if mv.kind() == Some(Kind::DoublePush) {
