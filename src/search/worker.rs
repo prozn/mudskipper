@@ -199,6 +199,12 @@ impl Worker {
     ///
     /// The side to move may stand pat on the static evaluation instead of capturing.
     /// In check it may not, and every evasion is searched so that mates are seen.
+    ///
+    /// Stalemate is not detected when the side to move is not in check: it stands pat on
+    /// the static evaluation even with no legal move. Detecting it would need a full
+    /// legal-move generation at every quiet node, which costs more than it gains, so this
+    /// is deliberate. The main search scores stalemate as a draw, so from depth 2 upwards
+    /// a stalemating move is seen as one; at depth 1 the engine may play into stalemate.
     fn quiescence(&mut self, board: &Board, ply: usize, mut alpha: i32, beta: i32) -> i32 {
         if self.should_stop() {
             return DRAW;
