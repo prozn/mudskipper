@@ -46,3 +46,17 @@ _Avoid_: Position (when the history is meant too)
 **Repetition**:
 A position recurring in a game with the same Zobrist key: same placement, side to move and castling rights, and the same en passant file when a pawn stands beside the pawn that just double-pushed (pins are ignored). Positions before the last capture or pawn move are never compared. `KeyHistory::repetitions` counts earlier occurrences, so a count of 2 is a threefold repetition.
 _Avoid_: Draw by repetition (when only one recurrence is meant)
+
+## Search
+
+**Transposition table**:
+A table, shared by every search thread, that remembers results from positions already searched, keyed by Zobrist key. Reaching the same position by a different move order then reuses that work. Its size is set by the `Hash` option.
+_Avoid_: Hash table, hash (except as the UCI option's name), TT (in prose)
+
+**Pruning**:
+Skipping a move or a whole node without searching it, because it is judged unable to change the result.
+_Avoid_: Culling, cutting (ambiguous with a beta cutoff)
+
+**Reduction**:
+Searching a move to a shallower depth than its siblings because it is unlikely to be best, and searching it again at full depth only if it turns out better than expected.
+_Avoid_: Culling, pruning (a reduced move is still searched)
