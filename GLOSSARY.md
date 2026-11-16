@@ -68,3 +68,10 @@ _Avoid_: Tactical move, forcing move (suggests checks), capture (leaves out non-
 **Quiet move**:
 A move that neither captures nor promotes, including castling. Every move is either a **Noisy move** or a quiet one.
 _Avoid_: Non-capture (includes non-capturing promotions), silent move
+
+**Killer move**:
+A **Quiet move** that recently caused a beta cutoff at the same ply of the current search, tried in sibling nodes straight after the **Noisy moves**. Two are kept per ply, and they are forgotten at the start of each search.
+
+**History**:
+A score for each **Quiet move**, by colour, origin and destination square, that rises when the move causes a beta cutoff and falls when it was tried before another quiet move did. Quiet moves other than the **Killer moves** are searched in order of it. It is kept between searches and forgotten on `ucinewgame`.
+_Avoid_: History table (except for the butterfly array itself), key history (that is the record of earlier positions for **Repetition**)

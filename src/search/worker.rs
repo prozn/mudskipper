@@ -3,12 +3,13 @@
 use std::time::{Duration, Instant};
 
 use super::MAX_PLY;
+use super::history::{History, Killers, bonus};
 use super::ordering::MovePicker;
 use super::score::{self, DRAW, INFINITY, Score};
 use super::stop::StopFlag;
 use super::time::TimeLimit;
 use super::tt::{Bound, Entry, TranspositionTable};
-use crate::chess::{Board, Game, KeyHistory, Move};
+use crate::chess::{Board, Colour, Game, KeyHistory, Move, MoveList};
 use crate::eval;
 
 /// Deepest iteration the search runs, leaving room in the principal variation table for
@@ -54,15 +55,21 @@ pub struct Report<'pv> {
     pub pv: &'pv [Move],
 }
 
-/// The state one search thread owns: its principal variation table, node counter and the
-/// keys of the positions leading to the one it is searching, plus the flag that stops it
-/// and the transposition table it shares with other threads.
+/// The state one search thread owns: its principal variation table, node counter, move
+/// ordering statistics and the keys of the positions leading to the one it is searching,
+/// plus the flag that stops it and the transposition table it shares with other threads.
+///
+/// History is kept from one search to the next, so a fresh worker is needed to forget it.
 #[derive(Debug)]
 pub struct Worker {
     pv: PvTable,
     tt: TranspositionTable,
+    /// Quiet moves that caused a beta cutoff at each ply, cleared for each search.
+    killers: Killers,
+    /// Butterfly history of quiet moves that caused a beta cutoff, kept between searches.
+    history: History,
     /// Keys of every position before the current one, from the game and the search.
-    history: KeyHistory,
+    keys: KeyHistory,
     /// Keys of the positions before the current one since the search's root.
     tree: KeyHistory,
     nodes: u64,
@@ -85,7 +92,9 @@ impl Worker {
         Self {
             pv: PvTable::new(),
             tt,
-            history: KeyHistory::new(),
+            killers: Killers::new(),
+            history: History::new(),
+            keys: KeyHistory::new(),
             tree: KeyHistory::new(),
             nodes: 0,
             seldepth: 0,
@@ -107,7 +116,8 @@ impl Worker {
     /// ignored until the first iteration completes.
     ///
     /// Each search starts a new generation of the transposition table, so that what
-    /// earlier searches stored is kept but replaced first.
+    /// earlier searches stored is kept but replaced first. Killer moves are cleared for
+    /// each search; history carries over.
     pub fn search(
         &mut self,
         game: &Game,
@@ -118,8 +128,9 @@ impl Worker {
         self.tt.new_search();
         let board = game.board();
         let mut best_move = *board.legal_moves().first()?;
-        self.history.clone_from(game.history());
+        self.keys.clone_from(game.history());
         self.tree = KeyHistory::new();
+        self.killers = Killers::new();
         self.nodes = 0;
         self.seldepth = 0;
         self.limits = limits;
@@ -166,6 +177,9 @@ impl Worker {
     /// A node at least [`IIR_MIN_DEPTH`] deep with no transposition table move is searched
     /// one ply shallower: with no good move to try first, a full-depth search would mostly
     /// be wasted effort.
+    ///
+    /// A quiet move causing a beta cutoff becomes a killer move at this ply and earns a
+    /// history bonus, and the quiet moves tried before it take the matching malus.
     fn negamax(
         &mut self,
         board: &Board,
@@ -207,7 +221,9 @@ impl Worker {
         let mut best = -INFINITY;
         let mut best_move = None;
         let mut legal_moves = 0;
-        for mv in MovePicker::new(board, tt_move) {
+        let mut quiets_tried = MoveList::new();
+        let mut picker = MovePicker::new(board, tt_move, self.killers.get(ply));
+        while let Some(mv) = picker.next_move(&self.history) {
             if !board.is_legal(mv) {
                 continue;
             }
@@ -231,9 +247,21 @@ impl Worker {
                     best_move = Some(mv);
                     self.pv.update(ply, mv);
                     if score >= beta {
+                        if !mv.is_noisy() {
+                            self.reward_quiet_cutoff(
+                                board.side_to_move(),
+                                ply,
+                                depth,
+                                mv,
+                                &quiets_tried,
+                            );
+                        }
                         break;
                     }
                 }
+            }
+            if !mv.is_noisy() {
+                quiets_tried.push(mv);
             }
         }
         if legal_moves == 0 {
@@ -296,8 +324,8 @@ impl Worker {
         let mut best = -INFINITY;
         let mut eval = None;
         let tt_move = tt_move(board, tt_entry);
-        let moves = if in_check {
-            MovePicker::new(board, tt_move)
+        let mut moves = if in_check {
+            MovePicker::new(board, tt_move, [None; 2])
         } else {
             let static_eval = tt_entry
                 .and_then(|entry| entry.eval)
@@ -324,7 +352,7 @@ impl Worker {
 
         let mut best_move = None;
         let mut legal_moves = 0;
-        for mv in moves {
+        while let Some(mv) = moves.next_move(&self.history) {
             if !board.is_legal(mv) {
                 continue;
             }
@@ -364,6 +392,24 @@ impl Worker {
         best
     }
 
+    /// Records that the quiet move `mv`, played by `colour`, caused a beta cutoff `ply`
+    /// plies from the root and `depth` plies deep, after the quiet moves `tried` failed to.
+    fn reward_quiet_cutoff(
+        &mut self,
+        colour: Colour,
+        ply: usize,
+        depth: u32,
+        mv: Move,
+        tried: &[Move],
+    ) {
+        self.killers.update(ply, mv);
+        let bonus = bonus(depth);
+        self.history.update(colour, mv, bonus);
+        for &quiet in tried {
+            self.history.update(colour, quiet, -bonus);
+        }
+    }
+
     /// Reports whether the limits or the stop flag say the search must stop, and if so
     /// marks it stopped.
     fn should_stop(&mut self) -> bool {
@@ -399,13 +445,13 @@ impl Worker {
 
     /// Records that the search is moving on from `board` to one of its children.
     fn enter(&mut self, board: &Board) {
-        self.history.push(board.key());
+        self.keys.push(board.key());
         self.tree.push(board.key());
     }
 
     /// Undoes the matching [`Worker::enter`] on returning from a child.
     fn leave(&mut self) {
-        self.history.pop();
+        self.keys.pop();
         self.tree.pop();
     }
 
@@ -417,7 +463,7 @@ impl Worker {
     /// positions in the game count only once they make a threefold repetition.
     fn is_draw(&self, board: &Board) -> bool {
         self.tree.repetitions(board) > 0
-            || self.history.repetitions(board) >= 2
+            || self.keys.repetitions(board) >= 2
             || board.is_fifty_move_draw()
             || board.has_insufficient_material()
     }

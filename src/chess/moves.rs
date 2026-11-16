@@ -276,7 +276,7 @@ impl MoveList {
     }
 
     /// Appends a move.
-    pub(super) fn push(&mut self, mv: Move) {
+    pub(crate) fn push(&mut self, mv: Move) {
         debug_assert!(self.len < MAX_MOVES, "move list overflow");
         self.moves[self.len] = mv;
         self.len += 1;

@@ -1,8 +1,10 @@
 //! Move ordering by a staged move picker (ADR-0003), which generates each group of moves
 //! only when the search reaches it: the transposition table's move, never generated; then
-//! captures and promotions by most valuable victim, least valuable attacker; then quiet
-//! moves in generation order. A cutoff in an early stage skips generating the later ones.
+//! captures and promotions by most valuable victim, least valuable attacker; then the
+//! killer moves; then the other quiet moves by history. A cutoff in an early stage skips
+//! generating the later ones.
 
+use super::history::History;
 use crate::chess::{Board, Move, MoveList, PieceType};
 
 /// Rough piece values for ordering captures, indexed by [`PieceType::index`].
@@ -28,6 +30,8 @@ enum Stage {
     TtMove,
     GenerateNoisy,
     Noisy,
+    FirstKiller,
+    SecondKiller,
     GenerateQuiet,
     Quiet,
     Done,
@@ -35,26 +39,45 @@ enum Stage {
 
 /// Pseudo-legal moves handed out best first, each once, generating and ordering each
 /// stage's moves only when it is reached.
+///
+/// It is not an [`Iterator`] because ordering quiet moves reads the worker's [`History`],
+/// which the search updates between moves: [`MovePicker::next_move`] borrows it afresh
+/// for each move.
 pub(super) struct MovePicker<'board> {
     board: &'board Board,
     tt_move: Option<Move>,
+    /// The killer moves to hand out after the noisy moves, most recent first. Only quiet
+    /// moves pseudo-legal in `board` that are not the TT move are kept.
+    killers: [Option<Move>; 2],
     coverage: Coverage,
     stage: Stage,
     /// The moves of the current stage.
     moves: MoveList,
-    /// The ordering score of each move of the noisy stage.
+    /// The ordering score of each move of the current stage.
     scores: [i32; MoveList::CAPACITY],
     /// How many of the current stage's moves have been handed out or skipped.
     next: usize,
 }
 
 impl<'board> MovePicker<'board> {
-    /// Returns a picker of every pseudo-legal move of `board`, with `tt_move` first.
+    /// Returns a picker of every pseudo-legal move of `board`, with `tt_move` first and
+    /// `killers` straight after the noisy moves.
     ///
     /// `tt_move` must be pseudo-legal in `board`, as checked by
-    /// [`Board::is_pseudo_legal`].
-    pub(super) fn new(board: &'board Board, tt_move: Option<Move>) -> Self {
-        Self::with_coverage(board, tt_move, Coverage::All)
+    /// [`Board::is_pseudo_legal`]. A killer need not be: one that is not, or that is
+    /// noisy or the TT move, is skipped.
+    pub(super) fn new(
+        board: &'board Board,
+        tt_move: Option<Move>,
+        killers: [Option<Move>; 2],
+    ) -> Self {
+        let mut picker = Self::with_coverage(board, tt_move, Coverage::All);
+        let usable = |killer: Option<Move>| {
+            killer.filter(|&mv| !mv.is_noisy() && Some(mv) != tt_move && board.is_pseudo_legal(mv))
+        };
+        let [first, second] = killers.map(usable);
+        picker.killers = [first, second.filter(|&mv| Some(mv) != first)];
+        picker
     }
 
     /// Returns a picker of the pseudo-legal captures and promotions of `board`, with
@@ -75,6 +98,7 @@ impl<'board> MovePicker<'board> {
         Self {
             board,
             tt_move,
+            killers: [None; 2],
             coverage,
             stage: Stage::TtMove,
             moves: MoveList::new(),
@@ -83,9 +107,10 @@ impl<'board> MovePicker<'board> {
         }
     }
 
-    /// Hands out the best-scored noisy move not yet handed out, or `None` once they are
-    /// all gone. The first of equally scored moves wins, keeping the order deterministic.
-    fn pick_best_noisy(&mut self) -> Option<Move> {
+    /// Hands out the best-scored move of the current stage not yet handed out, or `None`
+    /// once they are all gone. The first of equally scored moves wins, keeping the order
+    /// deterministic.
+    fn pick_best(&mut self) -> Option<Move> {
         if self.next == self.moves.len() {
             return None;
         }
@@ -101,19 +126,14 @@ impl<'board> MovePicker<'board> {
         Some(self.moves[self.next - 1])
     }
 
-    /// Hands out the next quiet move in generation order, or `None` once they are all
-    /// gone.
-    fn pick_next_quiet(&mut self) -> Option<Move> {
-        let mv = self.moves.get(self.next).copied()?;
-        self.next += 1;
-        Some(mv)
+    /// Reports whether `mv` was handed out by an earlier stage than the quiet one.
+    fn handed_out_early(&self, mv: Move) -> bool {
+        Some(mv) == self.tt_move || self.killers.contains(&Some(mv))
     }
-}
 
-impl Iterator for MovePicker<'_> {
-    type Item = Move;
-
-    fn next(&mut self) -> Option<Move> {
+    /// Hands out the next move, best first, or `None` once every move has been handed
+    /// out. Quiet moves are ordered by `history` as it stands when they are generated.
+    pub(super) fn next_move(&mut self, history: &History) -> Option<Move> {
         loop {
             match self.stage {
                 Stage::TtMove => {
@@ -130,19 +150,35 @@ impl Iterator for MovePicker<'_> {
                     self.next = 0;
                     self.stage = Stage::Noisy;
                 }
-                Stage::Noisy => match self.pick_best_noisy() {
+                Stage::Noisy => match self.pick_best() {
                     Some(mv) if Some(mv) == self.tt_move => {}
                     Some(mv) => return Some(mv),
-                    None if self.coverage == Coverage::All => self.stage = Stage::GenerateQuiet,
+                    None if self.coverage == Coverage::All => self.stage = Stage::FirstKiller,
                     None => self.stage = Stage::Done,
                 },
+                Stage::FirstKiller => {
+                    self.stage = Stage::SecondKiller;
+                    if let Some(mv) = self.killers[0] {
+                        return Some(mv);
+                    }
+                }
+                Stage::SecondKiller => {
+                    self.stage = Stage::GenerateQuiet;
+                    if let Some(mv) = self.killers[1] {
+                        return Some(mv);
+                    }
+                }
                 Stage::GenerateQuiet => {
                     self.moves = self.board.quiet_moves();
+                    let colour = self.board.side_to_move();
+                    for (i, &mv) in self.moves.iter().enumerate() {
+                        self.scores[i] = history.get(colour, mv);
+                    }
                     self.next = 0;
                     self.stage = Stage::Quiet;
                 }
-                Stage::Quiet => match self.pick_next_quiet() {
-                    Some(mv) if Some(mv) == self.tt_move => {}
+                Stage::Quiet => match self.pick_best() {
+                    Some(mv) if self.handed_out_early(mv) => {}
                     Some(mv) => return Some(mv),
                     None => self.stage = Stage::Done,
                 },
@@ -182,6 +218,7 @@ mod tests {
     use proptest::sample::Index;
 
     use super::*;
+    use crate::chess::Colour;
 
     /// Where random games start: the start position, a busy middlegame, an endgame, a
     /// position with promotions both ways and a Chess960 position.
@@ -203,23 +240,57 @@ mod tests {
         bits
     }
 
+    /// Every move `picker` hands out, in order.
+    fn drain(mut picker: MovePicker<'_>, history: &History) -> Vec<Move> {
+        std::iter::from_fn(|| picker.next_move(history)).collect()
+    }
+
     /// Checks that the pickers of `board` produce exactly the moves of the full
-    /// generators, each once, with `tt_move` first when they may return it.
-    fn check_pickers(board: &Board, tt_move: Option<Move>) -> Result<(), TestCaseError> {
+    /// generators, each once, with `tt_move` first when they may return it, and the
+    /// usable `killers` straight after the noisy moves.
+    fn check_pickers(
+        board: &Board,
+        tt_move: Option<Move>,
+        killers: [Option<Move>; 2],
+    ) -> Result<(), TestCaseError> {
         let fen = board.to_fen();
-        let all: Vec<Move> = MovePicker::new(board, tt_move).collect();
+        let history = History::new();
+        let all = drain(MovePicker::new(board, tt_move, killers), &history);
         prop_assert_eq!(
             sorted(all.iter().copied()),
             sorted(board.pseudo_legal_moves().iter().copied()),
-            "all moves of {:?} with TT move {:?}",
+            "all moves of {:?} with TT move {:?} and killers {:?}",
             fen,
-            tt_move
+            tt_move,
+            killers
         );
         if let Some(tt_move) = tt_move {
             prop_assert_eq!(all.first(), Some(&tt_move), "in {:?}", fen);
         }
+        let first_quiet = all
+            .iter()
+            .position(|mv| !mv.is_noisy() && Some(*mv) != tt_move)
+            .unwrap_or(all.len());
+        let mut usable: Vec<Move> = Vec::new();
+        for killer in killers.into_iter().flatten() {
+            if !killer.is_noisy()
+                && Some(killer) != tt_move
+                && board.is_pseudo_legal(killer)
+                && !usable.contains(&killer)
+            {
+                usable.push(killer);
+            }
+        }
+        prop_assert_eq!(
+            &all[first_quiet..(first_quiet + usable.len()).min(all.len())],
+            &usable[..],
+            "killers {:?} in {:?} with TT move {:?}",
+            killers,
+            fen,
+            tt_move
+        );
 
-        let noisy: Vec<Move> = MovePicker::noisy(board, tt_move).collect();
+        let noisy = drain(MovePicker::noisy(board, tt_move), &history);
         prop_assert_eq!(
             sorted(noisy.iter().copied()),
             sorted(board.noisy_moves().iter().copied()),
@@ -236,24 +307,57 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
+        /// Killers are drawn from the moves of the position before, as they would be from a
+        /// sibling node, so they are often noisy, not pseudo-legal or the TT move here.
         #[test]
-        fn pickers_produce_each_generated_move_once_with_or_without_a_tt_move(
+        fn pickers_produce_each_generated_move_once_with_or_without_a_tt_move_and_killers(
             start in 0..STARTS.len(),
-            choices in prop::collection::vec((any::<Index>(), any::<Option<Index>>()), 1..MAX_PLIES),
+            choices in prop::collection::vec(
+                (any::<Index>(), any::<Option<Index>>(), any::<[Option<Index>; 2]>()),
+                1..MAX_PLIES,
+            ),
         ) {
             let mut board = Board::from_fen(STARTS[start]).expect("start FEN is valid");
-            for (next, tt_choice) in choices {
+            let mut previous = board.pseudo_legal_moves();
+            for (next, tt_choice, killer_choices) in choices {
                 let pseudo_legal = board.pseudo_legal_moves();
                 let tt_move = tt_choice.map(|index| *index.get(&pseudo_legal));
-                check_pickers(&board, tt_move)?;
-                check_pickers(&board, None)?;
+                let killers = killer_choices.map(|choice| choice.map(|index| *index.get(&previous)));
+                check_pickers(&board, tt_move, killers)?;
+                check_pickers(&board, None, [None; 2])?;
                 let legal = board.legal_moves();
                 if legal.is_empty() {
                     break;
                 }
+                previous = pseudo_legal;
                 board = board.make(*next.get(&legal));
             }
         }
+    }
+
+    #[test]
+    fn killers_come_after_noisy_moves_and_other_quiets_follow_by_history() {
+        let board =
+            Board::from_fen("4k3/8/8/2r1q3/3P4/B4N2/P7/3Q3K w - - 0 1").expect("test FEN is valid");
+        let killer = board_move(&board, "h1g2");
+        let liked = board_move(&board, "d1d3");
+        let disliked = board_move(&board, "f3g1");
+        let mut history = History::new();
+        history.update(Colour::White, liked, 1_000);
+        history.update(Colour::White, disliked, -1_000);
+        let order: Vec<String> = drain(
+            MovePicker::new(&board, None, [Some(killer), None]),
+            &history,
+        )
+        .iter()
+        .map(Move::to_string)
+        .collect();
+        assert_eq!(order[4..6], ["h1g2", "d1d3"], "full order {order:?}");
+        assert_eq!(
+            order.last().map(String::as_str),
+            Some("f3g1"),
+            "full order {order:?}"
+        );
     }
 
     #[test]
@@ -262,8 +366,9 @@ mod tests {
         // or the bishop.
         let board =
             Board::from_fen("4k3/8/8/2r1q3/3P4/B4N2/P7/3Q3K w - - 0 1").expect("test FEN is valid");
-        let order: Vec<String> = MovePicker::new(&board, None)
-            .map(|mv| mv.to_string())
+        let order: Vec<String> = drain(MovePicker::new(&board, None, [None; 2]), &History::new())
+            .iter()
+            .map(Move::to_string)
             .collect();
         let first_quiet = order
             .iter()
