@@ -58,5 +58,5 @@ Skipping a move or a whole node without searching it, because it is judged unabl
 _Avoid_: Culling, cutting (ambiguous with a beta cutoff)
 
 **Reduction**:
-Searching a move to a shallower depth than its siblings because it is unlikely to be best, and searching it again at full depth only if it turns out better than expected.
+Searching a move, or a whole node, to a shallower depth than usual because it is unlikely to matter. A move reduced below its siblings' depth is searched again at full depth if it turns out better than expected.
 _Avoid_: Culling, pruning (a reduced move is still searched)
