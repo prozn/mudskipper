@@ -4,6 +4,7 @@
 //! search the same position side by side (Lazy SMP). Only one runs for now. The
 //! [`TranspositionTable`] is the one thing they share.
 
+mod history;
 mod ordering;
 mod score;
 mod stop;
