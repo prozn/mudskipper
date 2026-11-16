@@ -99,6 +99,26 @@ fn noisy_moves_are_the_captures_and_promotions_among_all_moves() {
 }
 
 #[test]
+fn quiet_moves_are_the_moves_that_neither_capture_nor_promote() {
+    let mut castling_seen = false;
+    for board in boards() {
+        let quiet = board.quiet_moves();
+        castling_seen |= quiet.iter().any(|mv| mv.is_castling());
+        let mut got: Vec<String> = quiet.iter().map(ToString::to_string).collect();
+        let mut expected: Vec<String> = board
+            .pseudo_legal_moves()
+            .iter()
+            .filter(|mv| !mv.is_noisy())
+            .map(ToString::to_string)
+            .collect();
+        got.sort();
+        expected.sort();
+        assert_eq!(got, expected, "in {}", board.to_fen());
+    }
+    assert!(castling_seen, "no position offered a quiet castling move");
+}
+
+#[test]
 fn kiwipete_has_eight_captures_and_both_castling_moves() {
     let board = Board::from_fen(POSITIONS[1]).expect("Kiwipete parses");
     let captures = board

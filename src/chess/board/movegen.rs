@@ -15,6 +15,20 @@ enum Selection {
     All,
     /// Only captures and promotions.
     Noisy,
+    /// Only moves that neither capture nor promote.
+    Quiet,
+}
+
+impl Selection {
+    /// Whether the pass produces captures and promotions.
+    fn includes_noisy(self) -> bool {
+        self != Self::Quiet
+    }
+
+    /// Whether the pass produces moves that neither capture nor promote.
+    fn includes_quiet(self) -> bool {
+        self != Self::Noisy
+    }
 }
 
 impl Board {
@@ -32,6 +46,14 @@ impl Board {
     #[must_use]
     pub fn noisy_moves(&self) -> MoveList {
         self.generate(Selection::Noisy)
+    }
+
+    /// Generates the pseudo-legal quiet moves: those that neither capture nor promote,
+    /// including castling. They and [`Board::noisy_moves`] together make up
+    /// [`Board::pseudo_legal_moves`], with no move in both.
+    #[must_use]
+    pub fn quiet_moves(&self) -> MoveList {
+        self.generate(Selection::Quiet)
     }
 
     /// Generates every legal move.
@@ -154,6 +176,7 @@ impl Board {
         let targets = match selection {
             Selection::All => !self.colour(us),
             Selection::Noisy => them,
+            Selection::Quiet => !self.occupied(),
         };
 
         self.generate_pawn_moves(&mut list, selection);
@@ -177,7 +200,7 @@ impl Board {
             }
         }
 
-        if selection == Selection::All {
+        if selection.includes_quiet() {
             for side in CastlingSide::ALL {
                 if let Some(rook) = self.castling.rook(us, side) {
                     let mv = Move::new(self.king(us), rook, Kind::Castling);
@@ -199,16 +222,21 @@ impl Board {
         let skipped_rank = Bitboard::rank(us.relative_rank(DOUBLE_PUSH_SKIPPED_RANK));
 
         let single = pawns.forward(us) & empty;
-        for to in single & last_rank {
-            push_promotions(list, to.forward(!us, 1), to, Kind::PROMOTIONS);
+        if selection.includes_noisy() {
+            for to in single & last_rank {
+                push_promotions(list, to.forward(!us, 1), to, Kind::PROMOTIONS);
+            }
         }
-        if selection == Selection::All {
+        if selection.includes_quiet() {
             for to in single & !last_rank {
                 list.push(Move::new(to.forward(!us, 1), to, Kind::Quiet));
             }
             for to in (single & skipped_rank).forward(us) & empty {
                 list.push(Move::new(to.forward(!us, 2), to, Kind::DoublePush));
             }
+        }
+        if !selection.includes_noisy() {
+            return;
         }
 
         for from in pawns {

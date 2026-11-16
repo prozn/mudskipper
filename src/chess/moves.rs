@@ -1,7 +1,7 @@
 //! Moves packed into 16 bits, and fixed-capacity lists of them.
 
 use std::fmt;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 use super::notation::CastlingNotation;
 use super::piece::PieceType;
@@ -255,7 +255,7 @@ const MAX_MOVES: usize = 256;
 
 /// A list of moves with a fixed capacity, stored inline without allocating.
 ///
-/// It dereferences to a slice of the moves it holds.
+/// It dereferences to a slice of the moves it holds, which may be reordered in place.
 #[derive(Clone, Debug)]
 pub struct MoveList {
     moves: [Move; MAX_MOVES],
@@ -307,6 +307,12 @@ impl Deref for MoveList {
 
     fn deref(&self) -> &[Move] {
         &self.moves[..self.len]
+    }
+}
+
+impl DerefMut for MoveList {
+    fn deref_mut(&mut self) -> &mut [Move] {
+        &mut self.moves[..self.len]
     }
 }
 
