@@ -13,9 +13,9 @@ use std::thread::{self, JoinHandle};
 
 use crate::chess::{Board, CastlingNotation, Game, ParseFenError, ParseMoveError, Piece, Square};
 use crate::eval;
-use crate::search::{Limits, Report, Score, StopFlag, Worker};
+use crate::search::{Report, Score, StopFlag, Worker};
 
-use go::{Go, parse_go};
+use go::{Go, SearchPlan, parse_go};
 use options::Options;
 
 /// Engine name reported in reply to `uci`.
@@ -285,12 +285,12 @@ impl Engine {
                 Ok(Go::Perft(depth)) => {
                     write_split_perft(output, self.game.board(), notation, depth)?;
                 }
-                Ok(Go::Search(request)) => {
-                    let side = self.game.board().side_to_move();
-                    match request.limits(side, self.options.move_overhead) {
-                        Ok(limits) => self.start_search(limits, request.infinite)?,
-                        Err(err) => writeln!(output, "info string invalid go: {err}")?,
+                Ok(Go::Search { request, ignored }) => {
+                    for err in ignored {
+                        writeln!(output, "info string ignoring go parameter: {err}")?;
                     }
+                    let side = self.game.board().side_to_move();
+                    self.start_search(request.plan(side, self.options.move_overhead))?;
                 }
                 Err(err) => writeln!(output, "info string invalid go: {err}")?,
             },
@@ -306,10 +306,20 @@ impl Engine {
         Ok(())
     }
 
-    /// Starts searching the current position on a new thread within `limits`. An
-    /// `infinite` search holds its `bestmove` until `stop`.
-    fn start_search(&mut self, limits: Limits, infinite: bool) -> io::Result<()> {
-        self.stop.lower();
+    /// Starts searching the current position on a new thread as `plan` says. An infinite
+    /// search holds its `bestmove` until `stop`, unless input has already ended and no
+    /// `stop` can come: then it is stopped at once, and reports after its first completed
+    /// iteration.
+    fn start_search(&mut self, plan: SearchPlan) -> io::Result<()> {
+        let SearchPlan { limits, infinite } = plan;
+        // Once input has ended, no `stop` can come to end an infinite search.
+        let input_ended = self.shutdown != Shutdown::No;
+        if infinite && input_ended {
+            self.stop.raise();
+        } else {
+            self.stop.lower();
+        }
+        let wait_for_stop = infinite && !input_ended;
         let worker = Arc::clone(&self.worker);
         let game = self.game.clone();
         let notation = self.options.mode.castling_notation();
@@ -331,7 +341,7 @@ impl Engine {
             })?;
         self.search = Some(Search {
             thread,
-            wait_for_stop: infinite,
+            wait_for_stop,
             bestmove: None,
         });
         Ok(())

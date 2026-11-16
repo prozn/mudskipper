@@ -132,6 +132,33 @@ impl Engine {
             .line
     }
 
+    /// Closes stdin, so the engine sees the end of its input.
+    pub fn close_stdin(&mut self) {
+        drop(self.stdin.take());
+    }
+
+    /// Reads every line until the engine closes stdout, returning them.
+    ///
+    /// Panics with the transcript if stdout is still open after the reply timeout.
+    pub fn read_to_end(&mut self) -> Vec<String> {
+        let deadline = Instant::now() + REPLY_TIMEOUT;
+        let mut lines = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.lines.recv_timeout(remaining) {
+                Ok(line) => {
+                    self.transcript.push(line.clone());
+                    lines.push(line);
+                }
+                Err(RecvTimeoutError::Disconnected) => return lines,
+                Err(RecvTimeoutError::Timeout) => panic!(
+                    "engine did not close stdout; output so far: {:?}",
+                    self.transcript
+                ),
+            }
+        }
+    }
+
     /// Waits for the process to exit on its own.
     ///
     /// Panics if it is still running after the reply timeout.

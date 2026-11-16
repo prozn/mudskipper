@@ -13,7 +13,13 @@ pub(super) enum Go {
     /// `go perft <depth>`: count the leaf nodes below each legal move.
     Perft(u32),
     /// Search for the best move.
-    Search(SearchRequest),
+    Search {
+        /// What the search should do.
+        request: SearchRequest,
+        /// The parameters that were dropped because they were unsupported or invalid, in
+        /// the order given.
+        ignored: Vec<GoError>,
+    },
 }
 
 /// A `go` command that asks for a search.
@@ -47,17 +53,48 @@ impl SearchRequest {
         &mut self.clocks[colour.index()]
     }
 
-    /// The limits of a search with `side` to move, keeping `overhead` back from the time
-    /// to move.
-    ///
-    /// `movetime` takes precedence over the clock. Without either, the search has no time
-    /// limit.
+    /// Sets `parameter` to `value`.
     ///
     /// # Errors
     ///
-    /// Returns [`GoError::MissingLimit`] if nothing would end the search: no depth, nodes,
-    /// time or `infinite`. A clock for the other side alone does not count.
-    pub fn limits(&self, side: Colour, overhead: Duration) -> Result<Limits, GoError> {
+    /// Returns [`GoError::InvalidValue`] if `value` is missing or invalid, leaving the
+    /// request unchanged.
+    fn set(&mut self, parameter: Parameter, value: &str) -> Result<(), GoError> {
+        let name = parameter.name();
+        match parameter {
+            Parameter::Depth => self.limits.depth = Some(parse_count(name, value)?),
+            Parameter::Nodes => self.limits.nodes = Some(parse_count(name, value)?),
+            Parameter::MoveTime => self.movetime = Some(parse_millis(name, value)?),
+            Parameter::WhiteTime => {
+                self.clock_mut(Colour::White).time = Some(parse_millis(name, value)?);
+            }
+            Parameter::BlackTime => {
+                self.clock_mut(Colour::Black).time = Some(parse_millis(name, value)?);
+            }
+            Parameter::WhiteIncrement => {
+                self.clock_mut(Colour::White).increment = Some(parse_millis(name, value)?);
+            }
+            Parameter::BlackIncrement => {
+                self.clock_mut(Colour::Black).increment = Some(parse_millis(name, value)?);
+            }
+            Parameter::MovesToGo => {
+                let moves = parse_count(name, value).ok().filter(|&n| n > 0);
+                self.moves_to_go = Some(moves.ok_or_else(|| GoError::InvalidValue {
+                    parameter: name,
+                    value: value.to_owned(),
+                })?);
+            }
+        }
+        Ok(())
+    }
+
+    /// The plan for a search with `side` to move, keeping `overhead` back from the time to
+    /// move.
+    ///
+    /// `movetime` takes precedence over the clock. Without either, the search has no time
+    /// limit. A search that nothing would end (no depth, nodes or time, where a clock for
+    /// the other side alone does not count) is infinite, as if `infinite` were given.
+    pub fn plan(&self, side: Colour, overhead: Duration) -> SearchPlan {
         let SideClock { time, increment } = self.clocks[side.index()];
         let clock = time.map(|time| Clock {
             time,
@@ -73,14 +110,31 @@ impl SearchRequest {
             time,
             ..self.limits
         };
-        if limits == Limits::default() && !self.infinite {
-            return Err(GoError::MissingLimit);
+        SearchPlan {
+            limits,
+            infinite: self.infinite || limits == Limits::default(),
         }
-        Ok(limits)
     }
 }
 
+/// How a search should run, worked out from a [`SearchRequest`] for the side to move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SearchPlan {
+    /// When the search stops.
+    pub limits: Limits,
+    /// Whether the `bestmove` must wait for `stop` even if the search ends sooner.
+    pub infinite: bool,
+}
+
 /// Parses a `go` command.
+///
+/// A search request is parsed leniently: an unsupported parameter, or one with a missing
+/// or invalid value, is dropped and listed in [`Go::Search::ignored`], and parsing carries
+/// on with the next word.
+///
+/// # Errors
+///
+/// Returns an error if `go perft` is not followed by exactly one valid depth.
 pub(super) fn parse_go(line: &str) -> Result<Go, GoError> {
     let args: Vec<&str> = line.split_whitespace().skip(1).collect();
     if let ["perft", rest @ ..] = args.as_slice() {
@@ -96,36 +150,77 @@ pub(super) fn parse_go(line: &str) -> Result<Go, GoError> {
         };
     }
     let mut request = SearchRequest::default();
-    let mut args = args.into_iter();
+    let mut ignored = Vec::new();
+    let mut args = args.into_iter().peekable();
     while let Some(name) = args.next() {
         if name == "infinite" {
             request.infinite = true;
-            continue;
-        }
-        let value = args.next().unwrap_or_default();
-        match name {
-            "depth" => request.limits.depth = Some(parse_count("depth", value)?),
-            "nodes" => request.limits.nodes = Some(parse_count("nodes", value)?),
-            "movetime" => request.movetime = Some(parse_millis("movetime", value)?),
-            "wtime" => request.clock_mut(Colour::White).time = Some(parse_millis("wtime", value)?),
-            "btime" => request.clock_mut(Colour::Black).time = Some(parse_millis("btime", value)?),
-            "winc" => {
-                request.clock_mut(Colour::White).increment = Some(parse_millis("winc", value)?);
+        } else if let Some(parameter) = Parameter::from_name(name) {
+            // With no value before the next parameter, the value is missing.
+            let value = args
+                .next_if(|&next| !is_parameter(next))
+                .unwrap_or_default();
+            if let Err(err) = request.set(parameter, value) {
+                ignored.push(err);
             }
-            "binc" => {
-                request.clock_mut(Colour::Black).increment = Some(parse_millis("binc", value)?);
-            }
-            "movestogo" => {
-                let moves = parse_count("movestogo", value).ok().filter(|&n| n > 0);
-                request.moves_to_go = Some(moves.ok_or_else(|| GoError::InvalidValue {
-                    parameter: "movestogo",
-                    value: value.to_owned(),
-                })?);
-            }
-            other => return Err(GoError::Unsupported(other.to_owned())),
+        } else {
+            ignored.push(GoError::Unsupported(name.to_owned()));
         }
     }
-    Ok(Go::Search(request))
+    Ok(Go::Search { request, ignored })
+}
+
+/// A `go` parameter this engine supports that takes a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Parameter {
+    Depth,
+    Nodes,
+    MoveTime,
+    WhiteTime,
+    BlackTime,
+    WhiteIncrement,
+    BlackIncrement,
+    MovesToGo,
+}
+
+impl Parameter {
+    /// Every parameter, for looking one up by name.
+    const ALL: [Self; 8] = [
+        Self::Depth,
+        Self::Nodes,
+        Self::MoveTime,
+        Self::WhiteTime,
+        Self::BlackTime,
+        Self::WhiteIncrement,
+        Self::BlackIncrement,
+        Self::MovesToGo,
+    ];
+
+    /// The parameter named `name`, if this engine supports it.
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|parameter| parameter.name() == name)
+    }
+
+    /// The parameter's name in a `go` command.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Depth => "depth",
+            Self::Nodes => "nodes",
+            Self::MoveTime => "movetime",
+            Self::WhiteTime => "wtime",
+            Self::BlackTime => "btime",
+            Self::WhiteIncrement => "winc",
+            Self::BlackIncrement => "binc",
+            Self::MovesToGo => "movestogo",
+        }
+    }
+}
+
+/// Reports whether `word` names a `go` parameter this engine supports.
+fn is_parameter(word: &str) -> bool {
+    word == "infinite" || Parameter::from_name(word).is_some()
 }
 
 /// Parses `value`, the value given for the `go` parameter `parameter`, as a count.
@@ -156,8 +251,6 @@ pub(super) enum GoError {
     },
     /// The parameter is not supported.
     Unsupported(String),
-    /// Nothing said when the search should end.
-    MissingLimit,
 }
 
 impl fmt::Display for GoError {
@@ -168,9 +261,6 @@ impl fmt::Display for GoError {
                 write!(f, "invalid {parameter} {value:?}")
             }
             Self::Unsupported(name) => write!(f, "unsupported parameter {name:?}"),
-            Self::MissingLimit => f.write_str(
-                "expected depth, nodes, movetime, infinite, or the side to move's wtime or btime",
-            ),
         }
     }
 }
