@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use crate::chess::{Board, Game};
-use crate::search::{Limits, StopFlag, Worker};
+use crate::search::{Limits, StopFlag, TranspositionTable, Worker};
 
 /// Depth each position is searched to when `bench` is given no depth. Chosen so that a
 /// release build takes a few seconds.
@@ -12,7 +12,6 @@ pub const DEFAULT_DEPTH: u32 = 5;
 
 /// Hash size in MB that Bench gives each position, so that the **Bench signature** does
 /// not depend on the `Hash` option.
-#[expect(dead_code, reason = "used once the transposition table exists")]
 const HASH_MB: usize = 16;
 
 /// The positions Bench searches: openings, middlegames, endgames and some **Chess960**
@@ -78,10 +77,10 @@ const POSITIONS: [&str; 50] = [
 /// and then the final line `<nodes> nodes <nps> nps`.
 ///
 /// Bench runs on one thread. Each position is searched by a fresh [`Worker`] with no
-/// limit other than `depth`, so nothing learned from one position carries over to the
-/// next and the node count depends only on the code, never on timing or the platform.
-/// Once there is a transposition table, each position must also get a fresh table of
-/// `HASH_MB` megabytes, whatever the `Hash` option says.
+/// limit other than `depth`, and with a transposition table of `HASH_MB` megabytes that
+/// is cleared first. Nothing learned from one position carries over to the next, so the
+/// node count depends only on the code, never on the order of the positions, timing or
+/// the platform.
 ///
 /// # Errors
 ///
@@ -91,20 +90,12 @@ const POSITIONS: [&str; 50] = [
 ///
 /// Panics if one of the fixed Bench positions is not a valid FEN, which is a bug.
 pub fn run(depth: u32, output: &mut impl Write) -> io::Result<()> {
-    let limits = Limits {
-        depth: Some(depth),
-        ..Limits::default()
-    };
+    let tt = TranspositionTable::new(HASH_MB);
     let mut total_nodes = 0;
     let mut elapsed = Duration::ZERO;
     for (index, fen) in POSITIONS.iter().enumerate() {
-        let board = Board::from_fen(fen)
-            .unwrap_or_else(|err| panic!("bench position {fen:?} is invalid: {err}"));
-        let game = Game::new(board);
-        let mut worker = Worker::new(StopFlag::new());
-        let mut nodes = 0;
         let start = Instant::now();
-        worker.search(&game, limits, |report| nodes = report.nodes);
+        let nodes = search_position(fen, depth, &tt);
         elapsed += start.elapsed();
         total_nodes += nodes;
         writeln!(
@@ -120,6 +111,22 @@ pub fn run(depth: u32, output: &mut impl Write) -> io::Result<()> {
     writeln!(output, "{total_nodes} nodes {nps} nps")
 }
 
+/// Searches the Bench position `fen` to `depth` with a fresh worker, after clearing `tt`,
+/// and returns the nodes searched.
+fn search_position(fen: &str, depth: u32, tt: &TranspositionTable) -> u64 {
+    let board = Board::from_fen(fen)
+        .unwrap_or_else(|err| panic!("bench position {fen:?} is invalid: {err}"));
+    let limits = Limits {
+        depth: Some(depth),
+        ..Limits::default()
+    };
+    tt.clear();
+    let mut worker = Worker::new(StopFlag::new(), tt.clone());
+    let mut nodes = 0;
+    worker.search(&Game::new(board), limits, |report| nodes = report.nodes);
+    nodes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +140,22 @@ mod tests {
                 "{fen:?} has no legal moves"
             );
         }
+    }
+
+    #[test]
+    fn node_counts_do_not_depend_on_the_order_of_the_positions() {
+        const DEPTH: u32 = 3;
+        let tt = TranspositionTable::new(1);
+        let forward: Vec<u64> = POSITIONS
+            .iter()
+            .map(|fen| search_position(fen, DEPTH, &tt))
+            .collect();
+        let mut backward: Vec<u64> = POSITIONS
+            .iter()
+            .rev()
+            .map(|fen| search_position(fen, DEPTH, &tt))
+            .collect();
+        backward.reverse();
+        assert_eq!(forward, backward);
     }
 }

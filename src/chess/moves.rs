@@ -105,10 +105,17 @@ impl Move {
         Self(from.index() as u16 | (to.index() as u16) << TO_SHIFT | (kind as u16) << KIND_SHIFT)
     }
 
-    /// Unpacks raw bits, for tests that try every possible encoding.
-    #[cfg(test)]
-    pub(super) const fn from_bits(bits: u16) -> Self {
+    /// Unpacks the raw bits of a move, as returned by [`Move::to_bits`].
+    ///
+    /// The result need not be a move in any position, nor even a valid encoding, so check
+    /// it with [`Board::is_pseudo_legal`](super::Board::is_pseudo_legal) before use.
+    pub(crate) const fn from_bits(bits: u16) -> Self {
         Self(bits)
+    }
+
+    /// The raw bits of the move. The null move is 0.
+    pub(crate) const fn to_bits(self) -> u16 {
+        self.0
     }
 
     /// The square the moving piece starts on.

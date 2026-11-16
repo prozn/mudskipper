@@ -21,6 +21,11 @@ impl Key {
     pub(super) const fn new(bits: u64) -> Self {
         Self(bits)
     }
+
+    /// The raw bits of the key.
+    pub(crate) const fn bits(self) -> u64 {
+        self.0
+    }
 }
 
 impl fmt::UpperHex for Key {

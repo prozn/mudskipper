@@ -7,6 +7,7 @@ use super::ordering::OrderedMoves;
 use super::score::{self, DRAW, INFINITY, Score};
 use super::stop::StopFlag;
 use super::time::TimeLimit;
+use super::tt::{Bound, Entry, TranspositionTable};
 use crate::chess::{Board, Game, KeyHistory, Move};
 use crate::eval;
 
@@ -42,15 +43,19 @@ pub struct Report<'pv> {
     pub nodes: u64,
     /// The time since the search started.
     pub elapsed: Duration,
+    /// How full the transposition table is, in permille.
+    pub hashfull: u32,
     /// The principal variation, starting with the best move.
     pub pv: &'pv [Move],
 }
 
 /// The state one search thread owns: its principal variation table, node counter and the
-/// keys of the positions leading to the one it is searching, plus the flag that stops it.
+/// keys of the positions leading to the one it is searching, plus the flag that stops it
+/// and the transposition table it shares with other threads.
 #[derive(Debug)]
 pub struct Worker {
     pv: PvTable,
+    tt: TranspositionTable,
     /// Keys of every position before the current one, from the game and the search.
     history: KeyHistory,
     /// Keys of the positions before the current one since the search's root.
@@ -68,11 +73,13 @@ pub struct Worker {
 }
 
 impl Worker {
-    /// Returns a worker ready to search, which stops when `stop` is raised.
+    /// Returns a worker ready to search, which stops when `stop` is raised and shares
+    /// `tt` with every other worker holding a clone of it.
     #[must_use]
-    pub fn new(stop: StopFlag) -> Self {
+    pub fn new(stop: StopFlag, tt: TranspositionTable) -> Self {
         Self {
             pv: PvTable::new(),
+            tt,
             history: KeyHistory::new(),
             tree: KeyHistory::new(),
             nodes: 0,
@@ -93,6 +100,9 @@ impl Worker {
     /// iteration short. A depth limit of 0 is treated as 1, so that there is always a
     /// searched move to report. For the same reason the time limit and the stop flag are
     /// ignored until the first iteration completes.
+    ///
+    /// Each search starts a new generation of the transposition table, so that what
+    /// earlier searches stored is kept but replaced first.
     pub fn search(
         &mut self,
         game: &Game,
@@ -100,6 +110,7 @@ impl Worker {
         mut report: impl FnMut(&Report<'_>),
     ) -> Option<Move> {
         self.start = Instant::now();
+        self.tt.new_search();
         let board = game.board();
         let mut best_move = *board.legal_moves().first()?;
         self.history.clone_from(game.history());
@@ -118,7 +129,7 @@ impl Worker {
             if self.interruptible && (self.stop.is_raised() || self.soft_time_is_up()) {
                 break;
             }
-            let score = self.negamax(board, depth, 0, -INFINITY, INFINITY);
+            let score = self.negamax(board, depth, 0, -INFINITY, INFINITY, Node::Pv);
             if self.stopped {
                 break;
             }
@@ -129,21 +140,32 @@ impl Worker {
                 pv: self.pv.line(0).to_vec(),
             };
             best_move = iteration.pv[0];
-            report(&iteration.report(self.nodes, self.start.elapsed()));
+            report(&iteration.report(self.nodes, self.start.elapsed(), self.tt.hashfull()));
             completed = Some(iteration);
             self.interruptible = true;
         }
         if self.stopped
             && let Some(iteration) = &completed
         {
-            report(&iteration.report(self.nodes, self.start.elapsed()));
+            report(&iteration.report(self.nodes, self.start.elapsed(), self.tt.hashfull()));
         }
         Some(best_move)
     }
 
     /// Searches `board`, `ply` plies from the root, to `depth` plies and returns its score
     /// within the window `alpha` to `beta`.
-    fn negamax(&mut self, board: &Board, depth: u32, ply: usize, mut alpha: i32, beta: i32) -> i32 {
+    ///
+    /// Off the principal variation, a transposition table entry at least `depth` deep
+    /// whose bound settles the window is returned without searching.
+    fn negamax(
+        &mut self,
+        board: &Board,
+        depth: u32,
+        ply: usize,
+        mut alpha: i32,
+        beta: i32,
+        node: Node,
+    ) -> i32 {
         self.pv.clear(ply);
         if depth == 0 {
             return self.quiescence(board, ply, alpha, beta);
@@ -159,16 +181,33 @@ impl Worker {
             return eval::evaluate(board);
         }
 
+        let tt_entry = self.tt.probe(board.key(), ply);
+        if let Some(entry) = tt_entry
+            && node == Node::NonPv
+            && entry.depth >= depth
+            && entry.cuts_off(alpha, beta)
+        {
+            return entry.score;
+        }
+        let tt_move = tt_move(board, tt_entry);
+
+        let original_alpha = alpha;
         let mut best = -INFINITY;
+        let mut best_move = None;
         let mut legal_moves = 0;
-        for mv in OrderedMoves::new(board, &board.pseudo_legal_moves()) {
+        for mv in OrderedMoves::new(board, &board.pseudo_legal_moves(), tt_move) {
             if !board.is_legal(mv) {
                 continue;
             }
             legal_moves += 1;
+            let child_node = if node == Node::Pv && legal_moves == 1 {
+                Node::Pv
+            } else {
+                Node::NonPv
+            };
             let child = board.make(mv);
             self.enter(board);
-            let score = -self.negamax(&child, depth - 1, ply + 1, -beta, -alpha);
+            let score = -self.negamax(&child, depth - 1, ply + 1, -beta, -alpha, child_node);
             self.leave();
             if self.stopped {
                 return DRAW;
@@ -177,6 +216,7 @@ impl Worker {
                 best = score;
                 if score > alpha {
                     alpha = score;
+                    best_move = Some(mv);
                     self.pv.update(ply, mv);
                     if score >= beta {
                         break;
@@ -191,6 +231,17 @@ impl Worker {
                 DRAW
             };
         }
+        self.tt.store(
+            board.key(),
+            ply,
+            Entry {
+                mv: best_move,
+                score: best,
+                eval: tt_entry.and_then(|entry| entry.eval),
+                depth,
+                bound: bound(best, original_alpha, beta),
+            },
+        );
         best
     }
 
@@ -205,6 +256,10 @@ impl Worker {
     /// legal-move generation at every quiet node, which costs more than it gains, so this
     /// is deliberate. The main search scores stalemate as a draw, so from depth 2 upwards
     /// a stalemating move is seen as one; at depth 1 the engine may play into stalemate.
+    ///
+    /// Every node probes the transposition table and returns an entry whose bound settles
+    /// the window, and stores its result at depth 0, so that main search entries win
+    /// replacement.
     fn quiescence(&mut self, board: &Board, ply: usize, mut alpha: i32, beta: i32) -> i32 {
         if self.should_stop() {
             return DRAW;
@@ -217,21 +272,46 @@ impl Worker {
             return eval::evaluate(board);
         }
 
+        let tt_entry = self.tt.probe(board.key(), ply);
+        if let Some(entry) = tt_entry
+            && entry.cuts_off(alpha, beta)
+        {
+            return entry.score;
+        }
+
+        let original_alpha = alpha;
         let in_check = board.in_check();
         let mut best = -INFINITY;
+        let mut eval = None;
         let moves = if in_check {
             board.pseudo_legal_moves()
         } else {
-            best = eval::evaluate(board);
+            let static_eval = tt_entry
+                .and_then(|entry| entry.eval)
+                .unwrap_or_else(|| eval::evaluate(board));
+            eval = Some(static_eval);
+            best = static_eval;
             if best >= beta {
+                self.tt.store(
+                    board.key(),
+                    ply,
+                    Entry {
+                        mv: None,
+                        score: best,
+                        eval,
+                        depth: 0,
+                        bound: bound(best, original_alpha, beta),
+                    },
+                );
                 return best;
             }
             alpha = alpha.max(best);
             board.noisy_moves()
         };
 
+        let mut best_move = None;
         let mut legal_moves = 0;
-        for mv in OrderedMoves::new(board, &moves) {
+        for mv in OrderedMoves::new(board, &moves, tt_move(board, tt_entry)) {
             if !board.is_legal(mv) {
                 continue;
             }
@@ -247,6 +327,7 @@ impl Worker {
                 best = score;
                 if score > alpha {
                     alpha = score;
+                    best_move = Some(mv);
                     if score >= beta {
                         break;
                     }
@@ -256,6 +337,17 @@ impl Worker {
         if in_check && legal_moves == 0 {
             return score::mated_in(ply);
         }
+        self.tt.store(
+            board.key(),
+            ply,
+            Entry {
+                mv: best_move,
+                score: best,
+                eval,
+                depth: 0,
+                bound: bound(best, original_alpha, beta),
+            },
+        );
         best
     }
 
@@ -318,6 +410,34 @@ impl Worker {
     }
 }
 
+/// Whether a node lies on the principal variation: the root, and the first move searched
+/// from each node that does. Only nodes off it take transposition table cutoffs, so that
+/// the principal variation is searched rather than read back from the table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Node {
+    Pv,
+    NonPv,
+}
+
+/// The move from `entry` to search first in `board`, if it has one that is pseudo-legal
+/// there. A move stored under the same key may still belong to another position.
+fn tt_move(board: &Board, entry: Option<Entry>) -> Option<Move> {
+    entry
+        .and_then(|entry| entry.mv)
+        .filter(|&mv| board.is_pseudo_legal(mv))
+}
+
+/// The bound of a fail-soft search of the window `alpha` to `beta` that returned `best`.
+fn bound(best: i32, alpha: i32, beta: i32) -> Bound {
+    if best >= beta {
+        Bound::Lower
+    } else if best > alpha {
+        Bound::Exact
+    } else {
+        Bound::Upper
+    }
+}
+
 /// The result of a completed iteration of iterative deepening.
 #[derive(Debug)]
 struct Iteration {
@@ -328,14 +448,16 @@ struct Iteration {
 }
 
 impl Iteration {
-    /// Reports this iteration with the search's current node count and elapsed time.
-    fn report(&self, nodes: u64, elapsed: Duration) -> Report<'_> {
+    /// Reports this iteration with the search's current node count, elapsed time and
+    /// transposition table fill.
+    fn report(&self, nodes: u64, elapsed: Duration, hashfull: u32) -> Report<'_> {
         Report {
             depth: self.depth,
             seldepth: self.seldepth,
             score: self.score,
             nodes,
             elapsed,
+            hashfull,
             pv: &self.pv,
         }
     }

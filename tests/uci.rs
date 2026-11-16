@@ -652,6 +652,46 @@ fn fen_with_the_side_not_to_move_in_check_is_rejected_and_search_survives() {
 }
 
 #[test]
+fn go_depth_returns_a_legal_bestmove_after_resizing_the_hash() {
+    let mut engine = Engine::start();
+    engine
+        .send("position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1");
+    let legal = perft_moves(&mut engine);
+    for mb in [1, 3, 7, 16, 100] {
+        engine.send(&format!("setoption name Hash value {mb}"));
+        let reply = search(&mut engine, "depth 4");
+        let best = best_move(&reply);
+        assert!(
+            legal.iter().any(|mv| mv == best),
+            "bestmove {best} is not legal with Hash {mb}"
+        );
+    }
+}
+
+#[test]
+fn hashfull_is_reported_in_permille_and_grows_as_the_table_fills() {
+    let mut engine = Engine::start();
+    engine.send("setoption name Hash value 1");
+    let reply = search(&mut engine, "depth 4");
+    let hashfull: Vec<u32> = depth_lines(&reply)
+        .iter()
+        .map(|line| {
+            info_field(line, "hashfull")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_else(|| panic!("no hashfull in {line:?}"))
+        })
+        .collect();
+    assert!(
+        hashfull.iter().all(|&permille| permille <= 1000),
+        "hashfull out of range: {hashfull:?}"
+    );
+    assert!(
+        hashfull.last().is_some_and(|&permille| permille > 0),
+        "a depth 4 search should fill some of a 1 MB table: {hashfull:?}"
+    );
+}
+
+#[test]
 fn go_nodes_stops_near_the_node_limit_with_a_legal_bestmove() {
     let mut engine = Engine::start();
     let legal = perft_moves(&mut engine);
