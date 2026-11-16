@@ -19,6 +19,11 @@ const MAX_DEPTH: u32 = MAX_PLY as u32 - 1;
 /// effect within about a millisecond without the cost of checking at every node.
 const CHECK_INTERVAL: u64 = 1024;
 
+/// Shallowest depth at which a node with no transposition table move is searched one ply
+/// shallower (internal iterative reduction), the threshold common among open-source
+/// engines at a similar stage. Lowering it reduces more nodes, trading accuracy for depth.
+const IIR_MIN_DEPTH: u32 = 4;
+
 /// When a search stops. A search with no limits runs to the deepest supported depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
@@ -157,10 +162,14 @@ impl Worker {
     ///
     /// Off the principal variation, a transposition table entry at least `depth` deep
     /// whose bound settles the window is returned without searching.
+    ///
+    /// A node at least [`IIR_MIN_DEPTH`] deep with no transposition table move is searched
+    /// one ply shallower: with no good move to try first, a full-depth search would mostly
+    /// be wasted effort.
     fn negamax(
         &mut self,
         board: &Board,
-        depth: u32,
+        mut depth: u32,
         ply: usize,
         mut alpha: i32,
         beta: i32,
@@ -190,6 +199,9 @@ impl Worker {
             return entry.score;
         }
         let tt_move = tt_move(board, tt_entry);
+        if tt_move.is_none() && depth >= IIR_MIN_DEPTH {
+            depth -= 1;
+        }
 
         let original_alpha = alpha;
         let mut best = -INFINITY;
