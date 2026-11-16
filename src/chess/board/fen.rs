@@ -61,6 +61,11 @@ pub enum ParseFenError {
     },
     /// The side to move is neither `w` nor `b`.
     InvalidSideToMove(String),
+    /// The side not to move is in check, so the side to move could capture its king.
+    OpponentInCheck {
+        /// The colour in check.
+        colour: Colour,
+    },
     /// The castling field is malformed or names a right with no rook to castle with.
     InvalidCastling(String),
     /// The en passant field is malformed or names a square no pawn just skipped.
@@ -93,6 +98,9 @@ impl fmt::Display for ParseFenError {
             }
             Self::PawnOnBackRank { square } => write!(f, "pawn on back rank square {square}"),
             Self::InvalidSideToMove(field) => write!(f, "invalid side to move {field:?}"),
+            Self::OpponentInCheck { colour } => {
+                write!(f, "{colour} is in check but {} is to move", !*colour)
+            }
             Self::InvalidCastling(field) => write!(f, "invalid castling rights {field:?}"),
             Self::InvalidEnPassant(field) => write!(f, "invalid en passant square {field:?}"),
             Self::InvalidHalfmoveClock(field) => write!(f, "invalid halfmove clock {field:?}"),
@@ -117,7 +125,8 @@ impl Board {
     ///
     /// Returns a [`ParseFenError`] naming the first problem found if `fen` is malformed or
     /// describes an impossible position: not one king per side, a pawn on a back rank,
-    /// a castling right with no rook, or an en passant square no pawn just skipped.
+    /// the side not to move in check, a castling right with no rook, or an en passant
+    /// square no pawn just skipped.
     pub fn from_fen(fen: &str) -> Result<Self, ParseFenError> {
         let fields: Vec<&str> = fen.split_whitespace().collect();
         if fields.len() < 4 {
@@ -134,6 +143,10 @@ impl Board {
         let mut board = Self::empty();
         parse_placement(&mut board, fields[0])?;
         board.side_to_move = parse_side_to_move(fields[1])?;
+        let opponent = !board.side_to_move;
+        if board.is_attacked(board.king(opponent), board.side_to_move, board.occupied()) {
+            return Err(ParseFenError::OpponentInCheck { colour: opponent });
+        }
         board.castling = parse_castling(&board, fields[2])?;
         board.en_passant = parse_en_passant(&board, fields[3])?;
         if let Some(&field) = fields.get(4) {

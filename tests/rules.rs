@@ -50,6 +50,15 @@ fn fifty_move_rule_applies_from_the_hundredth_halfmove() {
 }
 
 #[test]
+fn move_counters_saturate_at_their_maximum() {
+    // Black to move, so a black move advances both counters.
+    let board = play("8/8/4k3/8/8/4K3/8/r7 b - - 65535 65535", &["a1a2"]);
+    assert_eq!(board.halfmove_clock(), u16::MAX, "{}", board.to_fen());
+    assert_eq!(board.fullmove_number(), u16::MAX, "{}", board.to_fen());
+    assert!(board.is_fifty_move_draw(), "{}", board.to_fen());
+}
+
+#[test]
 fn captures_and_pawn_moves_reset_the_fifty_move_count() {
     let fen = "8/8/4k3/8/2p5/5K2/4P3/R7 w - - 99 80";
     for (moves, clock, drawn) in [
@@ -80,7 +89,7 @@ fn bare_kings_and_a_single_minor_piece_are_insufficient_material() {
     for fen in [
         "8/8/4k3/8/8/4K3/8/8 w - - 0 1",
         "8/8/4k3/8/8/4K3/8/1N6 w - - 0 1",
-        "8/8/4k3/8/8/4K3/8/2b5 b - - 0 1",
+        "8/8/4k3/8/8/4K3/8/2b5 w - - 0 1",
     ] {
         assert!(parse(fen).has_insufficient_material(), "{fen:?}");
     }

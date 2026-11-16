@@ -166,6 +166,28 @@ fn fen_describing_an_impossible_position_is_rejected() {
 }
 
 #[test]
+fn fen_where_the_side_not_to_move_is_in_check_is_rejected() {
+    // White to move could capture the black king with the rook.
+    let err = rejection("4k3/8/8/8/8/8/8/K3R3 w - - 0 1");
+    assert_eq!(
+        err,
+        ParseFenError::OpponentInCheck {
+            colour: Colour::Black
+        }
+    );
+    assert_eq!(err.to_string(), "black is in check but white is to move");
+    // The same with colours swapped, checked by a pawn.
+    assert_eq!(
+        rejection("4k3/8/8/8/8/8/3p4/4K3 b - - 0 1"),
+        ParseFenError::OpponentInCheck {
+            colour: Colour::White
+        }
+    );
+    // The side to move being in check is fine.
+    assert!(Board::from_fen("4k3/8/8/8/8/8/8/K3R3 b - - 0 1").is_ok());
+}
+
+#[test]
 fn fen_with_bad_side_to_move_is_rejected() {
     for side in ["x", "W", "white"] {
         let fen = format!("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR {side} KQkq - 0 1");
