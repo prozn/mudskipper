@@ -82,3 +82,6 @@ _Avoid_: PVS (in prose), NegaScout, scout search
 
 **Aspiration window**:
 A narrow window around the previous iteration's score, used to search the root from a modest depth onward. When the score falls outside it, the window is widened on that side and the root searched again until the score fits.
+
+**Check extension**:
+Searching a node one ply deeper than usual because the side to move is in check, so a checking line is not cut off before its point is seen. In practice this extends the checking move by one ply. Lines still end at the search's deepest ply.

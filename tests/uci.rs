@@ -623,6 +623,27 @@ fn deep_searches_report_exact_mate_scores() {
 }
 
 #[test]
+fn perpetual_check_finishes_depth_10_within_its_node_limit() {
+    // Black is a rook up, but Qg5+ starts a perpetual: Kf8 Qd8+ Kg7 Qg5+ and round again.
+    // Every Black node in the line is in check and extended, so a search that let the
+    // extensions run on unchecked would hit the node limit before depth 10.
+    let limit = 3_000_000;
+    let mut engine = Engine::start();
+    engine.send("position fen 6k1/5p1p/8/8/1r6/1q6/3Q1PPP/6K1 w - - 0 1");
+    let reply = search(&mut engine, &format!("depth 10 nodes {limit}"));
+    let last = depth_lines(&reply)
+        .pop()
+        .unwrap_or_else(|| panic!("no info depth line: {:?}", reply.before));
+    assert_eq!(
+        info_field(last, "depth"),
+        Some("10"),
+        "stopped short of depth 10 with a limit of {limit} nodes: {last:?}"
+    );
+    assert_eq!(final_score(&reply), "cp 0", "perpetual check is a draw");
+    assert_eq!(best_move(&reply), "d2g5", "Qg5+ starts the perpetual");
+}
+
+#[test]
 fn go_depth_reports_being_mated_as_a_negative_mate_score() {
     let mut engine = Engine::start();
     engine.send("position fen r5k1/5ppp/8/8/8/8/1R6/1R4K1 w - - 0 1 moves b2b8");
