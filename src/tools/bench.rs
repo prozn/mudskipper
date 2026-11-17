@@ -8,7 +8,7 @@ use crate::search::{Limits, StopFlag, TranspositionTable, Worker};
 
 /// Depth each position is searched to when `bench` is given no depth. Chosen so that a
 /// release build takes a few seconds.
-pub const DEFAULT_DEPTH: u32 = 7;
+pub const DEFAULT_DEPTH: u32 = 8;
 
 /// Hash size in MB that Bench gives each position, so that the **Bench signature** does
 /// not depend on the `Hash` option.
