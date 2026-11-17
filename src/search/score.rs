@@ -20,6 +20,11 @@ pub(super) const fn mated_in(ply: usize) -> i32 {
     -MATE + ply as i32
 }
 
+/// Reports whether `score` means either side mates.
+pub(super) const fn is_mate(score: i32) -> bool {
+    score >= MATE_BOUND || score <= -MATE_BOUND
+}
+
 /// Converts `score`, found `ply` plies from the root, to the form the transposition table
 /// stores: a mate score counts plies from the position itself rather than from the root,
 /// so that it stays right when the position is reached at another ply.

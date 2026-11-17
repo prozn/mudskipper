@@ -146,6 +146,13 @@ impl Board {
         }
     }
 
+    /// Reports whether `colour` has a piece other than its king and pawns.
+    #[must_use]
+    pub fn has_non_pawn_material(&self, colour: Colour) -> bool {
+        let kings_and_pawns = self.piece_type(PieceType::King) | self.piece_type(PieceType::Pawn);
+        !(self.colour(colour) & !kings_and_pawns).is_empty()
+    }
+
     /// Reports whether the side to move is in check.
     #[must_use]
     pub fn in_check(&self) -> bool {

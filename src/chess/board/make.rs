@@ -73,4 +73,51 @@ impl Board {
         }
         board
     }
+
+    /// Returns the position after the side to move passes, leaving this one unchanged.
+    ///
+    /// The other side gets the move, any en passant square is cleared and the key is
+    /// updated incrementally, as for a move. The halfmove clock counts the pass like any
+    /// other reversible move, so a caller detecting repetitions must not compare positions
+    /// from before it; [`KeyHistory::repetitions_within`] can stop at the pass.
+    ///
+    /// [`KeyHistory::repetitions_within`]: crate::chess::KeyHistory::repetitions_within
+    ///
+    /// Passing is not a legal move: the search uses it for null-move pruning. It must
+    /// not be played while the side to move is in check, or the other side could
+    /// capture the king.
+    #[must_use]
+    pub fn pass(&self) -> Self {
+        debug_assert!(!self.in_check(), "passing in check");
+        let mut board = self.clone();
+        let us = self.side_to_move;
+        if let Some(target) = board.en_passant.take()
+            && self.can_capture_en_passant(target)
+        {
+            board.key ^= zobrist::en_passant(target.file());
+        }
+        board.halfmove_clock = board.halfmove_clock.saturating_add(1);
+        board.side_to_move = !us;
+        board.key ^= zobrist::black_to_move();
+        if us == Colour::Black {
+            board.fullmove_number = board.fullmove_number.saturating_add(1);
+        }
+        board
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn passing_clears_an_available_en_passant_capture_from_the_key() {
+        let board =
+            Board::from_fen("rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3")
+                .expect("valid FEN");
+        let passed = board.pass();
+        assert_eq!(passed.en_passant(), None);
+        assert_eq!(passed.side_to_move(), Colour::Black);
+        assert_eq!(passed.key().bits(), passed.compute_key());
+    }
 }

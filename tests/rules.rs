@@ -209,3 +209,23 @@ fn popping_a_key_forgets_that_position() {
     assert_eq!(history.repetitions(&board), 0);
     assert_eq!(history.pop(), None);
 }
+
+#[test]
+fn a_lookback_limit_stops_the_comparison_at_that_many_positions_back() {
+    // The start position recurs four positions back. A search uses the limit to stop at a
+    // pass, which the halfmove clock counts like any other reversible move.
+    let (board, history) = play_game(STARTPOS, &["g1f3", "g8f6", "f3g1", "f6g8"]);
+    assert_eq!(history.repetitions_within(&board, 4), 1);
+    assert_eq!(history.repetitions_within(&board, 3), 0);
+    assert_eq!(history.repetitions_within(&board, usize::MAX), 1);
+}
+
+#[test]
+fn a_lookback_limit_never_reaches_past_the_last_irreversible_move() {
+    let fen = "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1";
+    let board = parse(fen);
+    let mut history = KeyHistory::new();
+    history.push(board.key());
+    history.push(Board::startpos().key());
+    assert_eq!(history.repetitions_within(&board, 2), 0);
+}
