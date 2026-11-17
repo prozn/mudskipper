@@ -522,6 +522,9 @@ impl Worker {
     /// straight after another null move, or when the side to move has only its king and
     /// pawns, where being obliged to move can be a disadvantage (zugzwang) that passing
     /// would hide. An unproven mate score is returned as beta.
+    ///
+    /// A cutoff is stored in the transposition table as a lower bound at `depth` with no
+    /// move, so that a transposed visit takes it from the table.
     fn null_move_cutoff(
         &mut self,
         board: &Board,
@@ -555,7 +558,19 @@ impl Worker {
         if self.stopped || score < beta {
             return None;
         }
-        Some(if score::is_mate(score) { beta } else { score })
+        let score = if score::is_mate(score) { beta } else { score };
+        self.tt.store(
+            board.key(),
+            ply,
+            Entry {
+                mv: None,
+                score,
+                eval: frame.static_eval,
+                depth,
+                bound: Bound::Lower,
+            },
+        );
+        Some(score)
     }
 
     /// Searches only noisy moves from `board`, `ply` plies from the root, until the
@@ -954,5 +969,39 @@ impl PvTable {
     /// The principal variation at `ply`.
     fn line(&self, ply: usize) -> &[Move] {
         &self.moves[ply][..self.lengths[ply]]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_null_move_cutoff_stores_a_lower_bound_with_no_move() {
+        // White is a queen up, far above beta, so passing still fails high.
+        let board = Board::from_fen("4k3/pppp4/8/8/8/8/PPPP4/3QK3 w - - 0 1").expect("valid FEN");
+        let tt = TranspositionTable::new(1);
+        let mut worker = Worker::new(StopFlag::new(), tt.clone());
+        let ply = 0;
+        let depth = 6;
+        let window = Window::new(-1, 0);
+        let in_check = false;
+        let tt_entry = None;
+        let eval = worker.record_static_eval(&board, ply, in_check, tt_entry);
+
+        let score = worker
+            .null_move_cutoff(&board, Node::NonPv, depth, ply, window)
+            .expect("a queen up, the null move fails high");
+
+        assert_eq!(
+            tt.probe(board.key(), ply),
+            Some(Entry {
+                mv: None,
+                score,
+                eval,
+                depth,
+                bound: Bound::Lower,
+            })
+        );
     }
 }
