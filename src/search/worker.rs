@@ -69,6 +69,40 @@ const LMR_FULL_DEPTH_MOVES: u32 = 3;
 /// positive. Lowering it lets history protect more moves from reduction.
 const LMR_HISTORY_DIVISOR: i32 = 8_192;
 
+/// Deepest depth at which a node may return its static evaluation without searching
+/// (reverse futility pruning), within the range of 6 to 8 common among open-source engines
+/// at a similar stage. Raising it prunes deeper nodes, where the static evaluation is a
+/// poorer guide to the searched score.
+const RFP_MAX_DEPTH: u32 = 7;
+
+/// The margin per ply of depth by which the static evaluation must clear beta for reverse
+/// futility pruning, in centipawns, as common among open-source engines at a similar
+/// stage. A smaller margin prunes more nodes but misses more threats.
+const RFP_MARGIN: i32 = 80;
+
+/// Deepest depth at which quiet moves are skipped when the static evaluation is too far
+/// below alpha for them to reach it (futility pruning), within the range common among
+/// open-source engines at a similar stage.
+const FP_MAX_DEPTH: u32 = 6;
+
+/// The margin, in centipawns, a quiet move is allowed to gain over the static evaluation
+/// at any depth for futility pruning. A smaller margin prunes more quiet moves.
+const FP_BASE_MARGIN: i32 = 90;
+
+/// The margin futility pruning allows per ply of depth beyond [`FP_BASE_MARGIN`], in
+/// centipawns, since a deeper search has more moves in which to win material back.
+const FP_DEPTH_MARGIN: i32 = 60;
+
+/// Deepest depth at which quiet moves are skipped once enough moves have been searched
+/// (late move pruning), within the range common among open-source engines at a similar
+/// stage.
+const LMP_MAX_DEPTH: u32 = 8;
+
+/// The number of moves late move pruning searches at any depth before skipping quiet
+/// moves; the count also grows by half the square of the depth. Raising it searches more
+/// quiet moves.
+const LMP_BASE_MOVES: u32 = 3;
+
 /// When a search stops. A search with no limits runs to the deepest supported depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
@@ -269,9 +303,9 @@ impl Worker {
     /// quiescence. Extensions deepen the search but never lengthen a line past the ply
     /// limit just below [`MAX_PLY`], where a node returns its static evaluation.
     ///
-    /// Off the principal variation and out of check, a node whose static evaluation is at
-    /// least `beta` may return a cutoff after giving the opponent a free move, as
-    /// [`Worker::null_move_cutoff`] describes.
+    /// Off the principal variation and out of check, a node whose static evaluation is well
+    /// above `beta` may return a cutoff without searching its moves, as
+    /// [`Worker::eval_cutoff`] describes.
     ///
     /// A node at least [`IIR_MIN_DEPTH`] deep with no transposition table move is searched
     /// one ply shallower: with no good move to try first, a full-depth search would mostly
@@ -279,6 +313,10 @@ impl Worker {
     ///
     /// Late quiet moves are searched to a reduced depth first, as
     /// [`Worker::late_move_reduction`] describes.
+    ///
+    /// At shallow nodes off the principal variation and out of check, the remaining quiet
+    /// moves are skipped once they look unable to raise `alpha` or enough moves have been
+    /// searched, as [`prunes_quiet`] describes.
     ///
     /// A quiet move causing a beta cutoff becomes a killer move at this ply and earns a
     /// history bonus, and the quiet moves tried before it take the matching malus.
@@ -312,16 +350,11 @@ impl Worker {
         }
 
         let tt_entry = self.tt.probe(board.key(), ply);
-        if let Some(entry) = tt_entry
-            && node == Node::NonPv
-            && entry.depth >= depth
-            && entry.cuts_off(alpha, beta)
-        {
-            return entry.score;
+        if let Some(score) = tt_cutoff(tt_entry, node, depth, alpha, beta) {
+            return score;
         }
-        let static_eval = (!in_check).then(|| static_eval(board, tt_entry));
-        self.stack[ply].static_eval = static_eval;
-        if let Some(score) = self.null_move_cutoff(board, node, depth, ply, beta) {
+        let static_eval = self.record_static_eval(board, ply, in_check, tt_entry);
+        if let Some(score) = self.eval_cutoff(board, node, depth, ply, beta) {
             return score;
         }
         let tt_move = tt_move(board, tt_entry);
@@ -336,6 +369,10 @@ impl Worker {
         let mut quiets_tried = MoveList::new();
         let mut picker = MovePicker::new(board, tt_move, self.killers.get(ply));
         while let Some(mv) = picker.next_move(&self.history) {
+            if prunes_quiet(mv, node, depth, static_eval, best, alpha, legal_moves) {
+                picker.skip_quiets();
+                continue;
+            }
             if !board.is_legal(mv) {
                 continue;
             }
@@ -474,6 +511,27 @@ impl Worker {
         reduction::base_reduction(depth, move_number)
             .saturating_sub(pv_bonus + history_bonus)
             .min(depth - 2)
+    }
+
+    /// Returns the score to cut off with at `board`, `ply` plies from the root and `depth`
+    /// plies deep, without searching its moves, if its static evaluation stands far
+    /// enough above `beta`: either the static evaluation itself, as
+    /// [`reverse_futility_prunes`] describes, or the score of a null-move search, as
+    /// [`Worker::null_move_cutoff`] describes. A node in check has no static evaluation
+    /// and is never cut off.
+    fn eval_cutoff(
+        &mut self,
+        board: &Board,
+        node: Node,
+        depth: u32,
+        ply: usize,
+        beta: i32,
+    ) -> Option<i32> {
+        let eval = self.stack[ply].static_eval?;
+        if reverse_futility_prunes(node, depth, eval, beta) {
+            return Some(eval);
+        }
+        self.null_move_cutoff(board, node, depth, ply, beta)
     }
 
     /// Gives the opponent a free move from `board`, `ply` plies from the root and `depth`
@@ -643,6 +701,21 @@ impl Worker {
         }
     }
 
+    /// Records the static evaluation of `board`, `ply` plies from the root, on the stack and
+    /// returns it, reading it from its transposition table `entry` when that holds one. A
+    /// node `in_check` is not evaluated and records `None`.
+    fn record_static_eval(
+        &mut self,
+        board: &Board,
+        ply: usize,
+        in_check: bool,
+        entry: Option<Entry>,
+    ) -> Option<i32> {
+        let eval = (!in_check).then(|| static_eval(board, entry));
+        self.stack[ply].static_eval = eval;
+        eval
+    }
+
     /// Reports whether the limits or the stop flag say the search must stop, and if so
     /// marks it stopped.
     fn should_stop(&mut self) -> bool {
@@ -713,6 +786,53 @@ impl Worker {
     }
 }
 
+/// Reports whether a node of kind `node`, `depth` plies deep with static evaluation `eval`,
+/// stands so far above `beta` that it may return `eval` without searching (reverse
+/// futility pruning).
+///
+/// Only nodes off the principal variation, out of check (which the caller rules out by
+/// having a static evaluation) and at most [`RFP_MAX_DEPTH`] deep are pruned, and never
+/// when `beta` is a mate score, which a static evaluation cannot prove.
+fn reverse_futility_prunes(node: Node, depth: u32, eval: i32, beta: i32) -> bool {
+    node == Node::NonPv
+        && depth <= RFP_MAX_DEPTH
+        && !score::is_mate(beta)
+        && eval - RFP_MARGIN * depth as i32 >= beta
+}
+
+/// Reports whether `mv` is a quiet move that, with the quiet moves after it, may be
+/// skipped at a node of kind `node`, `depth` plies deep with static evaluation
+/// `static_eval`, given the best score `best` so far, the window's `alpha` and the
+/// `legal_moves` already searched.
+///
+/// Quiet moves are skipped only off the principal variation and out of check (where
+/// `static_eval` is `None`), and only once a move has been searched with a score that is
+/// not a mate, so that a node never skips every move and is mistaken for checkmate or
+/// stalemate, and a mate found below it is never hidden. Before any move is searched,
+/// `best` is `-INFINITY`, which counts as a mate score. Past that, they are skipped when the
+/// static evaluation plus a margin growing with depth cannot reach `alpha` (futility
+/// pruning), or once enough moves for the depth have been searched (late move pruning).
+fn prunes_quiet(
+    mv: Move,
+    node: Node,
+    depth: u32,
+    static_eval: Option<i32>,
+    best: i32,
+    alpha: i32,
+    legal_moves: u32,
+) -> bool {
+    let Some(eval) = static_eval else {
+        return false;
+    };
+    if mv.is_noisy() || node == Node::Pv || score::is_mate(best) {
+        return false;
+    }
+    let futile =
+        depth <= FP_MAX_DEPTH && eval + FP_BASE_MARGIN + FP_DEPTH_MARGIN * depth as i32 <= alpha;
+    let late = depth <= LMP_MAX_DEPTH && legal_moves >= LMP_BASE_MOVES + depth * depth / 2;
+    futile || late
+}
+
 /// Whether a node lies on the principal variation: the root, the first move searched from
 /// each node that does, and any later move re-searched there with the full window. Only
 /// nodes off it take transposition table cutoffs, so that the principal variation is
@@ -721,6 +841,15 @@ impl Worker {
 enum Node {
     Pv,
     NonPv,
+}
+
+/// The score of the transposition table `entry` if it settles the window `alpha` to
+/// `beta` for a node of kind `node` searched to `depth` plies: only off the principal
+/// variation, and only from an entry searched at least as deep.
+fn tt_cutoff(entry: Option<Entry>, node: Node, depth: u32, alpha: i32, beta: i32) -> Option<i32> {
+    entry
+        .filter(|entry| node == Node::NonPv && entry.depth >= depth && entry.cuts_off(alpha, beta))
+        .map(|entry| entry.score)
 }
 
 /// The static evaluation of `board`, read from its transposition table `entry` when that

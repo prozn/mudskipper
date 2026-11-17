@@ -92,3 +92,15 @@ Searching a node one ply deeper than usual because the side to move is in check,
 **Late move reduction**:
 **Reduction** of a **Quiet move** searched late at a node, after the first few moves, by a number of plies that grows with the logarithms of the depth and the move's number. The TT move, **Killer moves**, moves that give check and every move from a node in check are not reduced, and moves with good **History** or on the principal variation are reduced less. A reduced move that beats alpha is searched again at full depth.
 _Avoid_: LMR (in prose)
+
+**Reverse futility pruning**:
+**Pruning** a shallow node off the principal variation, not in check, whose static evaluation exceeds beta by a margin that grows with depth: the node returns its static evaluation without searching its moves. It is not tried when beta is a mate score.
+_Avoid_: Static null-move pruning, RFP (in prose)
+
+**Futility pruning**:
+**Pruning** the remaining **Quiet moves** at a shallow node off the principal variation, not in check, whose static evaluation falls short of alpha by more than a margin that grows with depth, since no quiet move is likely to make up the difference. It starts only once a move has been searched with a score that is not a mate, so a node is never left with no move searched. **Noisy moves** are still searched.
+_Avoid_: FP (in prose)
+
+**Late move pruning**:
+**Pruning** the remaining **Quiet moves** at a shallow node off the principal variation, not in check, once a number of moves that grows with depth has been searched, the best of them with a score that is not a mate. **Noisy moves** are still searched.
+_Avoid_: Move count pruning, LMP (in prose)
