@@ -6,6 +6,7 @@
 
 mod history;
 mod ordering;
+mod reduction;
 mod score;
 mod stop;
 mod time;

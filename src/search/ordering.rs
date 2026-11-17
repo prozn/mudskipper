@@ -131,6 +131,12 @@ impl<'board> MovePicker<'board> {
         Some(mv) == self.tt_move || self.killers.contains(&Some(mv))
     }
 
+    /// Reports whether the picker has reached the quiet moves after the killers, so that
+    /// the move it last handed out is quiet and neither the TT move nor a killer.
+    pub(super) fn is_handing_out_late_quiets(&self) -> bool {
+        self.stage == Stage::Quiet
+    }
+
     /// Hands out the next move, best first, or `None` once every move has been handed
     /// out. Quiet moves are ordered by `history` as it stands when they are generated.
     pub(super) fn next_move(&mut self, history: &History) -> Option<Move> {
