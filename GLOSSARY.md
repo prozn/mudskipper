@@ -69,6 +69,10 @@ _Avoid_: Tactical move, forcing move (suggests checks), capture (leaves out non-
 A move that neither captures nor promotes, including castling. Every move is either a **Noisy move** or a quiet one.
 _Avoid_: Non-capture (includes non-capturing promotions), silent move
 
+**Static exchange evaluation**:
+Working out what a move wins or loses in material once the captures on its target square are played out, each side capturing with its least valuable attacker, including sliders uncovered behind earlier capturers, and free to stop when capturing on would lose. Pins are ignored. A **Noisy move** is good when it does not lose material by it and bad when it does; bad ones are searched after the **Quiet moves** and skipped by quiescence search out of check.
+_Avoid_: SEE (in prose), exchange evaluation
+
 **Killer move**:
 A **Quiet move** that recently caused a beta cutoff at the same ply of the current search, tried in sibling nodes straight after the **Noisy moves**. Two are kept per ply, and they are forgotten at the start of each search.
 
