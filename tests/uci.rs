@@ -597,7 +597,8 @@ fn deep_searches_report_exact_mate_scores() {
     // Deep enough that later iterations search the root inside an aspiration window: one
     // around a mate score, or, for the mate in four, around the centipawn score of the
     // iterations before the mate is seen, which the mate must fail high out of. The mate in
-    // four is first seen at depth 7, so that is as deep as the search needs to go.
+    // four is first seen at depth 12, where late move pruning stops skipping the quiet rook
+    // moves that deliver it, so that is as deep as the search needs to go.
     let cases = [
         ("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", Some("a1a8"), "mate 1"),
         (
@@ -615,10 +616,32 @@ fn deep_searches_report_exact_mate_scores() {
     let mut engine = Engine::start();
     for (fen, mating_move, score) in cases {
         engine.send(&format!("position fen {fen}"));
-        let reply = search(&mut engine, "depth 7");
+        let reply = search(&mut engine, "depth 12");
         if let Some(mating_move) = mating_move {
             assert_eq!(best_move(&reply), mating_move, "best move in {fen}");
         }
+        assert_eq!(final_score(&reply), score, "score in {fen}");
+    }
+}
+
+#[test]
+fn mates_are_scored_exactly_when_the_static_evaluation_says_otherwise() {
+    // Black is a queen and a rook up, but White mates in two with Rb8+. Pruning on the
+    // static evaluation must neither skip the mating line for White nor cut off Black's
+    // nodes before the mate is seen.
+    let cases = [
+        ("r5k1/5ppp/7r/7q/8/8/1R6/1R4K1 w - - 0 1", "b2b8", "mate 2"),
+        (
+            "r5k1/5ppp/7r/7q/8/8/1R6/1R4K1 w - - 0 1 moves b2b8",
+            "a8b8",
+            "mate -1",
+        ),
+    ];
+    let mut engine = Engine::start();
+    for (fen, best, score) in cases {
+        engine.send(&format!("position fen {fen}"));
+        let reply = search(&mut engine, "depth 8");
+        assert_eq!(best_move(&reply), best, "best move in {fen}");
         assert_eq!(final_score(&reply), score, "score in {fen}");
     }
 }

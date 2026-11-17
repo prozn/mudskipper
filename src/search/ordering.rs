@@ -137,6 +137,18 @@ impl<'board> MovePicker<'board> {
         self.stage == Stage::Quiet
     }
 
+    /// Stops handing out quiet moves, killers included, so that only the noisy moves not
+    /// yet handed out remain. Quiet moves not yet generated never are.
+    pub(super) fn skip_quiets(&mut self) {
+        self.coverage = Coverage::Noisy;
+        if matches!(
+            self.stage,
+            Stage::FirstKiller | Stage::SecondKiller | Stage::GenerateQuiet | Stage::Quiet
+        ) {
+            self.stage = Stage::Done;
+        }
+    }
+
     /// Hands out the next move, best first, or `None` once every move has been handed
     /// out. Quiet moves are ordered by `history` as it stands when they are generated.
     pub(super) fn next_move(&mut self, history: &History) -> Option<Move> {
@@ -381,6 +393,33 @@ mod tests {
             .position(|mv| !board_move(&board, mv).is_noisy())
             .expect("there are quiet moves");
         assert_eq!(&order[..first_quiet], ["d4e5", "f3e5", "d4c5", "a3c5"]);
+    }
+
+    #[test]
+    fn skipping_quiets_still_hands_out_the_remaining_noisy_moves_and_nothing_after() {
+        let board =
+            Board::from_fen("4k3/8/8/2r1q3/3P4/B4N2/P7/3Q3K w - - 0 1").expect("test FEN is valid");
+        let killer = board_move(&board, "h1g2");
+        let history = History::new();
+
+        let mut picker = MovePicker::new(&board, None, [Some(killer), None]);
+        let first = picker.next_move(&history).map(|mv| mv.to_string());
+        assert_eq!(first.as_deref(), Some("d4e5"));
+        picker.skip_quiets();
+        let rest: Vec<String> = drain(picker, &history)
+            .iter()
+            .map(Move::to_string)
+            .collect();
+        assert_eq!(rest, ["f3e5", "d4c5", "a3c5"]);
+
+        let mut picker = MovePicker::new(&board, None, [Some(killer), None]);
+        let handed_out: Vec<String> = std::iter::from_fn(|| picker.next_move(&history))
+            .take(5)
+            .map(|mv| mv.to_string())
+            .collect();
+        assert_eq!(handed_out.last().map(String::as_str), Some("h1g2"));
+        picker.skip_quiets();
+        assert_eq!(picker.next_move(&history), None, "after {handed_out:?}");
     }
 
     /// The pseudo-legal move of `board` written as `text`.
