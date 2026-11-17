@@ -593,6 +593,36 @@ fn go_depth_finds_mate_in_one_and_mate_in_two() {
 }
 
 #[test]
+fn deep_searches_report_exact_mate_scores() {
+    // Deep enough that later iterations search the root inside an aspiration window: one
+    // around a mate score, or, for the mate in four, around the centipawn score of the
+    // iterations before the mate is seen, which the mate must fail high out of.
+    let cases = [
+        ("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", Some("a1a8"), "mate 1"),
+        (
+            "r5k1/5ppp/8/8/8/8/1R6/1R4K1 w - - 0 1",
+            Some("b2b8"),
+            "mate 2",
+        ),
+        (
+            "r5k1/5ppp/8/8/8/8/1R6/1R4K1 w - - 0 1 moves b2b8",
+            Some("a8b8"),
+            "mate -1",
+        ),
+        ("8/8/6k1/8/8/8/R7/1R4K1 w - - 0 1", None, "mate 4"),
+    ];
+    let mut engine = Engine::start();
+    for (fen, mating_move, score) in cases {
+        engine.send(&format!("position fen {fen}"));
+        let reply = search(&mut engine, "depth 9");
+        if let Some(mating_move) = mating_move {
+            assert_eq!(best_move(&reply), mating_move, "best move in {fen}");
+        }
+        assert_eq!(final_score(&reply), score, "score in {fen}");
+    }
+}
+
+#[test]
 fn go_depth_reports_being_mated_as_a_negative_mate_score() {
     let mut engine = Engine::start();
     engine.send("position fen r5k1/5ppp/8/8/8/8/1R6/1R4K1 w - - 0 1 moves b2b8");

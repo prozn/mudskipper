@@ -75,3 +75,10 @@ A **Quiet move** that recently caused a beta cutoff at the same ply of the curre
 **History**:
 A score for each **Quiet move**, by colour, origin and destination square, that rises when the move causes a beta cutoff and falls when it was tried before another quiet move did. Quiet moves other than the **Killer moves** are searched in order of it. It is kept between searches and forgotten on `ucinewgame`.
 _Avoid_: History table (except for the butterfly array itself), key history (that is the record of earlier positions for **Repetition**)
+
+**Principal variation search**:
+Searching the first move at a node with the full window and every later move with a null window just above alpha, which only proves the move is no better. At a node on the principal variation, a move whose null-window score lands inside the window is searched again with the full window for its exact score.
+_Avoid_: PVS (in prose), NegaScout, scout search
+
+**Aspiration window**:
+A narrow window around the previous iteration's score, used to search the root from a modest depth onward. When the score falls outside it, the window is widened on that side and the root searched again until the score fits.
