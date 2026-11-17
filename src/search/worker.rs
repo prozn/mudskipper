@@ -37,6 +37,20 @@ const ASPIRATION_MIN_DEPTH: u32 = 4;
 /// misses more often, each miss costing a re-search.
 const ASPIRATION_DELTA: i32 = 20;
 
+/// Shallowest depth at which null-move pruning is tried, the threshold common among
+/// open-source engines at a similar stage. Lowering it prunes more shallow nodes, where
+/// the reduced search is little more than quiescence.
+const NMP_MIN_DEPTH: u32 = 3;
+
+/// The plies a null move's search is reduced by at any depth, beyond the ply the null
+/// move itself takes, as common among open-source engines at a similar stage. A larger
+/// reduction makes the null-move search cheaper but more likely to miss a threat.
+const NMP_BASE_REDUCTION: u32 = 3;
+
+/// The null-move reduction grows by a ply for each this many plies of depth, so that deep
+/// nodes, where a missed threat is more likely to be found again later, are reduced more.
+const NMP_DEPTH_DIVISOR: u32 = 3;
+
 /// When a search stops. A search with no limits runs to the deepest supported depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
@@ -84,6 +98,9 @@ pub struct Worker {
     keys: KeyHistory,
     /// Keys of the positions before the current one since the search's root.
     tree: KeyHistory,
+    /// What the search knows about each node of the current line, by ply. One frame more
+    /// than [`MAX_PLY`], since quiescence enters a child at the last ply before stopping.
+    stack: [Frame; MAX_PLY + 1],
     nodes: u64,
     seldepth: usize,
     limits: Limits,
@@ -108,6 +125,7 @@ impl Worker {
             history: History::new(),
             keys: KeyHistory::new(),
             tree: KeyHistory::new(),
+            stack: [Frame::ROOT; MAX_PLY + 1],
             nodes: 0,
             seldepth: 0,
             limits: Limits::default(),
@@ -142,6 +160,7 @@ impl Worker {
         let mut best_move = *board.legal_moves().first()?;
         self.keys.clone_from(game.history());
         self.tree = KeyHistory::new();
+        self.stack[0] = Frame::ROOT;
         self.killers = Killers::new();
         self.nodes = 0;
         self.seldepth = 0;
@@ -232,6 +251,10 @@ impl Worker {
     /// quiescence. Extensions deepen the search but never lengthen a line past the ply
     /// limit just below [`MAX_PLY`], where a node returns its static evaluation.
     ///
+    /// Off the principal variation and out of check, a node whose static evaluation is at
+    /// least `beta` may return a cutoff after giving the opponent a free move, as
+    /// [`Worker::null_move_cutoff`] describes.
+    ///
     /// A node at least [`IIR_MIN_DEPTH`] deep with no transposition table move is searched
     /// one ply shallower: with no good move to try first, a full-depth search would mostly
     /// be wasted effort.
@@ -260,7 +283,7 @@ impl Worker {
             return DRAW;
         }
         self.count_node(ply);
-        if ply > 0 && self.is_draw(board) {
+        if ply > 0 && self.is_draw(board, ply) {
             return DRAW;
         }
         if ply >= MAX_PLY - 1 {
@@ -274,6 +297,11 @@ impl Worker {
             && entry.cuts_off(alpha, beta)
         {
             return entry.score;
+        }
+        let static_eval = (!in_check).then(|| static_eval(board, tt_entry));
+        self.stack[ply].static_eval = static_eval;
+        if let Some(score) = self.null_move_cutoff(board, node, depth, ply, beta) {
+            return score;
         }
         let tt_move = tt_move(board, tt_entry);
         if tt_move.is_none() && depth >= IIR_MIN_DEPTH {
@@ -292,18 +320,9 @@ impl Worker {
             }
             legal_moves += 1;
             let child = board.make(mv);
-            self.enter(board);
-            let score = if legal_moves == 1 {
-                -self.negamax(&child, depth - 1, ply + 1, -beta, -alpha, node)
-            } else {
-                let score =
-                    -self.negamax(&child, depth - 1, ply + 1, -alpha - 1, -alpha, Node::NonPv);
-                if node == Node::Pv && score > alpha && score < beta && !self.stopped {
-                    -self.negamax(&child, depth - 1, ply + 1, -beta, -alpha, Node::Pv)
-                } else {
-                    score
-                }
-            };
+            self.enter(board, ply, Reached::Move);
+            let score =
+                self.search_child(&child, depth - 1, ply + 1, alpha, beta, node, legal_moves);
             self.leave();
             if self.stopped {
                 return DRAW;
@@ -341,12 +360,90 @@ impl Worker {
             Entry {
                 mv: best_move,
                 score: best,
-                eval: tt_entry.and_then(|entry| entry.eval),
+                eval: static_eval,
                 depth,
                 bound: bound(best, original_alpha, beta),
             },
         );
         best
+    }
+
+    /// Searches `child`, the position after the `move_number`th legal move from a node of kind
+    /// `node` searched with the window `alpha` to `beta`, to `depth` plies at `ply`, and
+    /// returns its score from the parent's point of view.
+    ///
+    /// The first move is searched with the full window. Later moves get a null window just
+    /// above `alpha`, and only at a node on the principal variation, when that score lands
+    /// inside the window, a full-window re-search (principal variation search).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a child search needs the node's full state; see #44 for a window type"
+    )]
+    fn search_child(
+        &mut self,
+        child: &Board,
+        depth: u32,
+        ply: usize,
+        alpha: i32,
+        beta: i32,
+        node: Node,
+        move_number: u32,
+    ) -> i32 {
+        if move_number == 1 {
+            return -self.negamax(child, depth, ply, -beta, -alpha, node);
+        }
+        let score = -self.negamax(child, depth, ply, -alpha - 1, -alpha, Node::NonPv);
+        if node == Node::Pv && score > alpha && score < beta && !self.stopped {
+            -self.negamax(child, depth, ply, -beta, -alpha, Node::Pv)
+        } else {
+            score
+        }
+    }
+
+    /// Gives the opponent a free move from `board`, `ply` plies from the root and `depth`
+    /// plies deep, and returns the score to cut off with if a reduced search still fails
+    /// high (null-move pruning).
+    ///
+    /// The null move is tried only off the principal variation, out of check, when the
+    /// static evaluation is at least `beta`, `beta` is not a mate score, and from
+    /// [`NMP_MIN_DEPTH`] on. It is not tried
+    /// straight after another null move, or when the side to move has only its king and
+    /// pawns, where being obliged to move can be a disadvantage (zugzwang) that passing
+    /// would hide. An unproven mate score is returned as `beta`.
+    fn null_move_cutoff(
+        &mut self,
+        board: &Board,
+        node: Node,
+        depth: u32,
+        ply: usize,
+        beta: i32,
+    ) -> Option<i32> {
+        let frame = self.stack[ply];
+        if node == Node::Pv
+            || frame.static_eval.is_none_or(|eval| eval < beta)
+            || score::is_mate(beta)
+            || depth < NMP_MIN_DEPTH
+            || frame.null_ply == Some(ply)
+            || !board.has_non_pawn_material(board.side_to_move())
+        {
+            return None;
+        }
+        let reduction = NMP_BASE_REDUCTION + depth / NMP_DEPTH_DIVISOR;
+        let child = board.pass();
+        self.enter(board, ply, Reached::NullMove);
+        let score = -self.negamax(
+            &child,
+            depth.saturating_sub(reduction + 1),
+            ply + 1,
+            -beta,
+            -beta + 1,
+            Node::NonPv,
+        );
+        self.leave();
+        if self.stopped || score < beta {
+            return None;
+        }
+        Some(if score::is_mate(score) { beta } else { score })
     }
 
     /// Searches only noisy moves from `board`, `ply` plies from the root, until the
@@ -369,7 +466,7 @@ impl Worker {
             return DRAW;
         }
         self.count_node(ply);
-        if self.is_draw(board) {
+        if self.is_draw(board, ply) {
             return DRAW;
         }
         if ply >= MAX_PLY {
@@ -391,9 +488,7 @@ impl Worker {
         let mut moves = if in_check {
             MovePicker::new(board, tt_move, [None; 2])
         } else {
-            let static_eval = tt_entry
-                .and_then(|entry| entry.eval)
-                .unwrap_or_else(|| eval::evaluate(board));
+            let static_eval = static_eval(board, tt_entry);
             eval = Some(static_eval);
             best = static_eval;
             if best >= beta {
@@ -422,7 +517,7 @@ impl Worker {
             }
             legal_moves += 1;
             let child = board.make(mv);
-            self.enter(board);
+            self.enter(board, ply, Reached::Move);
             let score = -self.quiescence(&child, ply + 1, -beta, -alpha);
             self.leave();
             if self.stopped {
@@ -507,10 +602,15 @@ impl Worker {
         self.seldepth = self.seldepth.max(ply);
     }
 
-    /// Records that the search is moving on from `board` to one of its children.
-    fn enter(&mut self, board: &Board) {
+    /// Records that the search is moving on from `board`, `ply` plies from the root, to
+    /// the child it `reached` by a move or a null move.
+    fn enter(&mut self, board: &Board, ply: usize, reached: Reached) {
         self.keys.push(board.key());
         self.tree.push(board.key());
+        self.stack[ply + 1].null_ply = match reached {
+            Reached::Move => self.stack[ply].null_ply,
+            Reached::NullMove => Some(ply + 1),
+        };
     }
 
     /// Undoes the matching [`Worker::enter`] on returning from a child.
@@ -519,15 +619,21 @@ impl Worker {
         self.tree.pop();
     }
 
-    /// Reports whether `board` is drawn by repetition, the fifty-move rule or
-    /// insufficient material.
+    /// Reports whether `board`, `ply` plies from the root, is drawn by repetition, the
+    /// fifty-move rule or insufficient material.
     ///
     /// A position that already occurred since the root counts as a repetition: if
     /// repeating is best now, it stays best when the position comes round again. Earlier
-    /// positions in the game count only once they make a threefold repetition.
-    fn is_draw(&self, board: &Board) -> bool {
-        self.tree.repetitions(board) > 0
-            || self.keys.repetitions(board) >= 2
+    /// positions in the game count only once they make a threefold repetition. Positions
+    /// from before the line's last null move are never compared: the null move is not a
+    /// real move, so a position before it cannot recur after it.
+    fn is_draw(&self, board: &Board, ply: usize) -> bool {
+        // With no null move on the line, only the halfmove clock limits the comparison.
+        let lookback = self.stack[ply]
+            .null_ply
+            .map_or(usize::MAX, |null| ply - null);
+        self.tree.repetitions_within(board, lookback) > 0
+            || self.keys.repetitions_within(board, lookback) >= 2
             || board.is_fifty_move_draw()
             || board.has_insufficient_material()
     }
@@ -541,6 +647,39 @@ impl Worker {
 enum Node {
     Pv,
     NonPv,
+}
+
+/// The static evaluation of `board`, read from its transposition table `entry` when that
+/// holds one.
+fn static_eval(board: &Board, entry: Option<Entry>) -> i32 {
+    entry
+        .and_then(|entry| entry.eval)
+        .unwrap_or_else(|| eval::evaluate(board))
+}
+
+/// What the search knows about one node of the current line.
+#[derive(Clone, Copy, Debug)]
+struct Frame {
+    /// The node's static evaluation, set by the main search: `None` in check, where the
+    /// search does not evaluate.
+    static_eval: Option<i32>,
+    /// The ply of the node reached by the line's last null move, if there is one.
+    null_ply: Option<usize>,
+}
+
+impl Frame {
+    /// The frame of the search's root, which no null move precedes.
+    const ROOT: Self = Self {
+        static_eval: None,
+        null_ply: None,
+    };
+}
+
+/// How the search reached a node from its parent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reached {
+    Move,
+    NullMove,
 }
 
 /// The move from `entry` to search first in `board`, if it has one that is pseudo-legal

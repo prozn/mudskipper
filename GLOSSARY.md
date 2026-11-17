@@ -85,3 +85,6 @@ A narrow window around the previous iteration's score, used to search the root f
 
 **Check extension**:
 Searching a node one ply deeper than usual because the side to move is in check, so a checking line is not cut off before its point is seen. In practice this extends the checking move by one ply. Lines still end at the search's deepest ply.
+
+**Null-move pruning**:
+**Pruning** a node off the principal variation by letting the side to move pass: if a reduced-depth search after the pass still fails high, the node returns the cutoff without searching its moves. It is tried only when the static evaluation is at least beta, and not in check, straight after another pass, or when the side to move has only its king and pawns, where zugzwang makes passing unsound.

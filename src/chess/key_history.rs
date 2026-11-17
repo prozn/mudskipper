@@ -37,11 +37,22 @@ impl KeyHistory {
     /// counts them, are compared. A count of 2 is a threefold repetition.
     #[must_use]
     pub fn repetitions(&self, board: &Board) -> usize {
+        self.repetitions_within(board, usize::MAX)
+    }
+
+    /// Counts the earlier occurrences of `board` among the last `plies` positions, as
+    /// [`KeyHistory::repetitions`] does but looking no further back.
+    ///
+    /// The search passes the plies since its last null move, so that no position from
+    /// before the pass is compared: the halfmove clock counts a pass like any other
+    /// reversible move.
+    #[must_use]
+    pub fn repetitions_within(&self, board: &Board, plies: usize) -> usize {
         let key = board.key();
         self.keys
             .iter()
             .rev()
-            .take(usize::from(board.halfmove_clock()))
+            .take(usize::from(board.halfmove_clock()).min(plies))
             .skip(1)
             .step_by(2)
             .filter(|&&earlier| earlier == key)

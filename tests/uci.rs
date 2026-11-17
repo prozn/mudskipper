@@ -646,6 +646,18 @@ fn perpetual_check_finishes_depth_10_within_its_node_limit() {
 }
 
 #[test]
+fn king_and_pawn_zugzwang_finds_the_winning_king_move() {
+    // Fine 70 (Lasker-Reichhelm): only Kb1 wins, by taking the opposition at a distance.
+    // White wins only by putting Black in zugzwang, which a null move from a king and pawn
+    // ending would hide: with null moves tried there, the search still prefers Kb2 at
+    // this depth. Kb1 is first found at depth 20.
+    let mut engine = Engine::start();
+    engine.send("position fen 8/k7/3p4/p2P1p2/P2P1P2/8/8/K7 w - - 0 1");
+    let reply = search(&mut engine, "depth 24");
+    assert_eq!(best_move(&reply), "a1b1", "lines: {:?}", reply.before);
+}
+
+#[test]
 fn go_depth_reports_being_mated_as_a_negative_mate_score() {
     let mut engine = Engine::start();
     engine.send("position fen r5k1/5ppp/8/8/8/8/1R6/1R4K1 w - - 0 1 moves b2b8");

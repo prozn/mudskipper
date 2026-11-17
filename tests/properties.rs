@@ -92,4 +92,42 @@ proptest! {
             check_position(&board, notations)?;
         }
     }
+
+    #[test]
+    fn passing_keeps_the_incremental_key_equal_to_the_computed_key(
+        start in 0..STARTS.len(),
+        choices in prop::collection::vec(any::<Index>(), 0..=MAX_PLIES),
+    ) {
+        let (fen, _) = STARTS[start];
+        let mut board = Board::from_fen(fen).expect("start FENs are valid");
+        for choice in choices {
+            if !board.in_check() {
+                check_pass(&board)?;
+            }
+            let moves = board.legal_moves();
+            if moves.is_empty() {
+                break;
+            }
+            board = board.make(*choice.get(&moves));
+        }
+    }
+}
+
+/// Checks that passing in `board` gives the other side the move with no en passant
+/// capture, and keeps the incremental key equal to the key computed from scratch.
+fn check_pass(board: &Board) -> Result<(), TestCaseError> {
+    let passed = board.pass();
+    let fen = passed.to_fen();
+    let reparsed =
+        Board::from_fen(&fen).map_err(|err| TestCaseError::fail(format!("{fen:?}: {err}")))?;
+    prop_assert_eq!(
+        passed.key(),
+        reparsed.key(),
+        "incremental key after passing in {:?} differs from the key computed from {:?}",
+        board.to_fen(),
+        fen
+    );
+    prop_assert_eq!(passed.side_to_move(), !board.side_to_move());
+    prop_assert_eq!(passed.en_passant(), None);
+    Ok(())
 }
