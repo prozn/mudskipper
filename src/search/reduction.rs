@@ -33,7 +33,7 @@ const LN_2: u128 = 2_977_044_472;
 /// is 0.
 static TABLE: [[u8; TABLE_SIZE]; TABLE_SIZE] = build_table();
 
-/// The plies a late quiet move is reduced by, before adjustments, at `depth` plies deep
+/// The plies a late move is reduced by, before adjustments, at `depth` plies deep
 /// when it is the `move_number`th legal move searched: rounded down, 0.75 plus the product
 /// of the natural logarithms of the two over 2.25.
 pub(super) fn base_reduction(depth: u32, move_number: u32) -> u32 {

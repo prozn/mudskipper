@@ -53,7 +53,7 @@ const NMP_BASE_REDUCTION: u32 = 3;
 /// nodes, where a missed threat is more likely to be found again later, are reduced more.
 const NMP_DEPTH_DIVISOR: u32 = 3;
 
-/// Shallowest depth at which late quiet moves are reduced, the threshold common among
+/// Shallowest depth at which late moves are reduced, the threshold common among
 /// open-source engines at a similar stage. Below it the reduced search would be little
 /// more than quiescence.
 const LMR_MIN_DEPTH: u32 = 3;
@@ -61,7 +61,7 @@ const LMR_MIN_DEPTH: u32 = 3;
 // A reduction capped at depth - 2 must not underflow.
 const _: () = assert!(LMR_MIN_DEPTH >= 2, "LMR_MIN_DEPTH must be at least 2");
 
-/// The number of legal moves searched at each node before later quiet moves are reduced,
+/// The number of legal moves searched at each node before later moves are reduced,
 /// as common among open-source engines at a similar stage. Raising it searches more moves
 /// at full depth.
 const LMR_FULL_DEPTH_MOVES: u32 = 3;
@@ -306,7 +306,8 @@ impl Worker {
     /// one ply shallower: with no good move to try first, a full-depth search would mostly
     /// be wasted effort.
     ///
-    /// Late quiet moves are searched to a reduced depth first, as
+    /// Late moves, the quiet moves after the killers and the noisy moves that lose material,
+    /// are searched to a reduced depth first, as
     /// [`Worker::late_move_reduction`] describes.
     ///
     /// At shallow nodes off the principal variation and out of check, the remaining quiet
@@ -374,7 +375,7 @@ impl Worker {
             let child = board.make(mv);
             let order = if legal_moves == 1 {
                 Order::First
-            } else if !in_check && picker.is_handing_out_late_quiets() {
+            } else if !in_check && picker.is_handing_out_late_moves() {
                 Order::Later {
                     reduction: self.late_move_reduction(&child, mv, node, depth, legal_moves),
                 }
@@ -459,17 +460,18 @@ impl Worker {
         }
     }
 
-    /// The plies by which to reduce the quiet move `mv` (late move reduction), which
+    /// The plies by which to reduce the late move `mv` (late move reduction), which
     /// reached `child` as the `move_number`th legal move from a node of kind `node`
     /// searched to `depth` plies.
     ///
     /// Moves are reduced only from [`LMR_MIN_DEPTH`] on, after the first
     /// [`LMR_FULL_DEPTH_MOVES`], and when they do not give check, by an amount from a table
     /// that grows with the logarithms of the depth and move number. The reduction is a ply
-    /// smaller on the principal variation and smaller still for a move with good history,
-    /// and always leaves at least one ply to search. The caller rules out the other moves
-    /// that must not be reduced: those from a node in check, noisy moves, the
-    /// transposition table move and killer moves.
+    /// smaller on the principal variation and, for a quiet move, smaller still with good
+    /// history, and always leaves at least one ply to search. The caller rules out the
+    /// other moves that must not be reduced: those from a node in check, noisy moves that
+    /// do not lose material by static exchange evaluation, the transposition table move
+    /// and killer moves.
     fn late_move_reduction(
         &self,
         child: &Board,
@@ -484,7 +486,13 @@ impl Worker {
         // The side that played mv is the one not to move in child.
         let colour = !child.side_to_move();
         let pv_bonus = u32::from(node == Node::Pv);
-        let history_bonus = (self.history.get(colour, mv) / LMR_HISTORY_DIVISOR).max(0);
+        // History is kept only for quiet moves.
+        let history = if mv.is_noisy() {
+            0
+        } else {
+            self.history.get(colour, mv)
+        };
+        let history_bonus = (history / LMR_HISTORY_DIVISOR).max(0);
         let history_bonus = u32::try_from(history_bonus).expect("history bonus is not negative");
         reduction::base_reduction(depth, move_number)
             .saturating_sub(pv_bonus + history_bonus)
