@@ -226,6 +226,12 @@ impl Worker {
     /// Off the principal variation, a transposition table entry at least `depth` deep
     /// whose bound settles the window is returned without searching.
     ///
+    /// A node whose side to move is in check is searched one ply deeper (check extension),
+    /// so that a checking line is not cut off before its point is seen. That includes a
+    /// node in check at depth 0, which searches every evasion rather than dropping into
+    /// quiescence. Extensions deepen the search but never lengthen a line past the ply
+    /// limit just below [`MAX_PLY`], where a node returns its static evaluation.
+    ///
     /// A node at least [`IIR_MIN_DEPTH`] deep with no transposition table move is searched
     /// one ply shallower: with no good move to try first, a full-depth search would mostly
     /// be wasted effort.
@@ -241,7 +247,12 @@ impl Worker {
         beta: i32,
         node: Node,
     ) -> i32 {
+        debug_assert!(ply < MAX_PLY, "ply {ply} is out of bounds");
         self.pv.clear(ply);
+        let in_check = board.in_check();
+        if in_check {
+            depth += 1;
+        }
         if depth == 0 {
             return self.quiescence(board, ply, alpha, beta);
         }
@@ -322,11 +333,7 @@ impl Worker {
             }
         }
         if legal_moves == 0 {
-            return if board.in_check() {
-                score::mated_in(ply)
-            } else {
-                DRAW
-            };
+            return if in_check { score::mated_in(ply) } else { DRAW };
         }
         self.tt.store(
             board.key(),

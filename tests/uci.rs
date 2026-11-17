@@ -596,7 +596,8 @@ fn go_depth_finds_mate_in_one_and_mate_in_two() {
 fn deep_searches_report_exact_mate_scores() {
     // Deep enough that later iterations search the root inside an aspiration window: one
     // around a mate score, or, for the mate in four, around the centipawn score of the
-    // iterations before the mate is seen, which the mate must fail high out of.
+    // iterations before the mate is seen, which the mate must fail high out of. The mate in
+    // four is first seen at depth 7, so that is as deep as the search needs to go.
     let cases = [
         ("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", Some("a1a8"), "mate 1"),
         (
@@ -614,12 +615,34 @@ fn deep_searches_report_exact_mate_scores() {
     let mut engine = Engine::start();
     for (fen, mating_move, score) in cases {
         engine.send(&format!("position fen {fen}"));
-        let reply = search(&mut engine, "depth 9");
+        let reply = search(&mut engine, "depth 7");
         if let Some(mating_move) = mating_move {
             assert_eq!(best_move(&reply), mating_move, "best move in {fen}");
         }
         assert_eq!(final_score(&reply), score, "score in {fen}");
     }
+}
+
+#[test]
+fn perpetual_check_finishes_depth_10_within_its_node_limit() {
+    // Black's doubled rooks win the queen as soon as White stops checking, but Qg5+ starts a
+    // perpetual: Kf8 Qd8+ Kg7 Qg5+ and round again.
+    // Every Black node in the line is in check and extended, so a search that let the
+    // extensions run on unchecked would hit the node limit before depth 10.
+    let limit = 600_000;
+    let mut engine = Engine::start();
+    engine.send("position fen 6k1/5p1p/8/8/1r6/1r6/3Q4/7K w - - 0 1");
+    let reply = search(&mut engine, &format!("depth 10 nodes {limit}"));
+    let last = depth_lines(&reply)
+        .pop()
+        .unwrap_or_else(|| panic!("no info depth line: {:?}", reply.before));
+    assert_eq!(
+        info_field(last, "depth"),
+        Some("10"),
+        "stopped short of depth 10 with a limit of {limit} nodes: {last:?}"
+    );
+    assert_eq!(final_score(&reply), "cp 0", "perpetual check is a draw");
+    assert_eq!(best_move(&reply), "d2g5", "Qg5+ starts the perpetual");
 }
 
 #[test]
