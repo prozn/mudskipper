@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use super::score;
+use super::window::Window;
 use crate::chess::{Key, Move};
 
 /// Entries in a bucket, which fills one 64-byte cache line.
@@ -62,15 +63,14 @@ pub(super) struct Entry {
 }
 
 impl Entry {
-    /// Reports whether the stored score settles a search of the window `alpha` to
-    /// `beta` by failing high or low, so that the search can return it at once. The
-    /// caller checks the depth.
+    /// Reports whether the stored score settles a search of `window` by failing high or
+    /// low, so that the search can return it at once. The caller checks the depth.
     ///
     /// An exact score inside the window does not cut off: it would become part of the
     /// principal variation, whose moves below this position the table does not hold.
-    pub(super) fn cuts_off(&self, alpha: i32, beta: i32) -> bool {
-        (self.score >= beta && self.bound != Bound::Upper)
-            || (self.score <= alpha && self.bound != Bound::Lower)
+    pub(super) fn cuts_off(&self, window: Window) -> bool {
+        (self.score >= window.beta() && self.bound != Bound::Upper)
+            || (self.score <= window.alpha() && self.bound != Bound::Lower)
     }
 }
 
@@ -438,21 +438,21 @@ mod tests {
     #[test]
     fn an_exact_score_cuts_off_only_outside_the_window() {
         let exact = entry(50);
-        assert!(exact.cuts_off(-100, 50), "fails high");
-        assert!(exact.cuts_off(50, 100), "fails low");
+        assert!(exact.cuts_off(Window::new(-100, 50)), "fails high");
+        assert!(exact.cuts_off(Window::new(50, 100)), "fails low");
         assert!(
-            !exact.cuts_off(0, 100),
+            !exact.cuts_off(Window::new(0, 100)),
             "inside the window it would join the principal variation"
         );
         let lower = Entry {
             bound: Bound::Lower,
             ..exact
         };
-        assert!(lower.cuts_off(0, 50) && !lower.cuts_off(0, 51));
+        assert!(lower.cuts_off(Window::new(0, 50)) && !lower.cuts_off(Window::new(0, 51)));
         let upper = Entry {
             bound: Bound::Upper,
             ..exact
         };
-        assert!(upper.cuts_off(50, 100) && !upper.cuts_off(49, 100));
+        assert!(upper.cuts_off(Window::new(50, 100)) && !upper.cuts_off(Window::new(49, 100)));
     }
 }

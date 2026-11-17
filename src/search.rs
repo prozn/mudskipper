@@ -11,6 +11,7 @@ mod score;
 mod stop;
 mod time;
 mod tt;
+mod window;
 mod worker;
 
 pub use score::Score;
