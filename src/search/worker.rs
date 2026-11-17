@@ -5,11 +5,12 @@ use std::time::{Duration, Instant};
 use super::MAX_PLY;
 use super::history::{History, Killers, bonus};
 use super::ordering::MovePicker;
+use super::reduction;
 use super::score::{self, DRAW, INFINITY, Score};
 use super::stop::StopFlag;
 use super::time::TimeLimit;
 use super::tt::{Bound, Entry, TranspositionTable};
-use crate::chess::{Board, Colour, Game, KeyHistory, Move, MoveList};
+use crate::chess::{Board, Game, KeyHistory, Move, MoveList};
 use crate::eval;
 
 /// Deepest iteration the search runs, leaving room in the principal variation table for
@@ -50,6 +51,23 @@ const NMP_BASE_REDUCTION: u32 = 3;
 /// The null-move reduction grows by a ply for each this many plies of depth, so that deep
 /// nodes, where a missed threat is more likely to be found again later, are reduced more.
 const NMP_DEPTH_DIVISOR: u32 = 3;
+
+/// Shallowest depth at which late quiet moves are reduced, the threshold common among
+/// open-source engines at a similar stage. Below it the reduced search would be little
+/// more than quiescence.
+const LMR_MIN_DEPTH: u32 = 3;
+
+// A reduction capped at depth - 2 must not underflow.
+const _: () = assert!(LMR_MIN_DEPTH >= 2, "LMR_MIN_DEPTH must be at least 2");
+
+/// The number of legal moves searched at each node before later quiet moves are reduced,
+/// as common among open-source engines at a similar stage. Raising it searches more moves
+/// at full depth.
+const LMR_FULL_DEPTH_MOVES: u32 = 3;
+
+/// A late move is reduced a ply less for each this much history, if its history is
+/// positive. Lowering it lets history protect more moves from reduction.
+const LMR_HISTORY_DIVISOR: i32 = 8_192;
 
 /// When a search stops. A search with no limits runs to the deepest supported depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -259,6 +277,9 @@ impl Worker {
     /// one ply shallower: with no good move to try first, a full-depth search would mostly
     /// be wasted effort.
     ///
+    /// Late quiet moves are searched to a reduced depth first, as
+    /// [`Worker::late_move_reduction`] describes.
+    ///
     /// A quiet move causing a beta cutoff becomes a killer move at this ply and earns a
     /// history bonus, and the quiet moves tried before it take the matching malus.
     fn negamax(
@@ -320,9 +341,22 @@ impl Worker {
             }
             legal_moves += 1;
             let child = board.make(mv);
+            let reduction = if !in_check && picker.is_handing_out_late_quiets() {
+                self.late_move_reduction(&child, mv, node, depth, legal_moves)
+            } else {
+                0
+            };
             self.enter(board, ply, Reached::Move);
-            let score =
-                self.search_child(&child, depth - 1, ply + 1, alpha, beta, node, legal_moves);
+            let score = self.search_child(
+                &child,
+                depth - 1,
+                ply + 1,
+                alpha,
+                beta,
+                node,
+                legal_moves,
+                reduction,
+            );
             self.leave();
             if self.stopped {
                 return DRAW;
@@ -334,15 +368,7 @@ impl Worker {
                     best_move = Some(mv);
                     self.pv.update(ply, mv);
                     if score >= beta {
-                        if !mv.is_noisy() {
-                            self.reward_quiet_cutoff(
-                                board.side_to_move(),
-                                ply,
-                                depth,
-                                mv,
-                                &quiets_tried,
-                            );
-                        }
+                        self.record_cutoff(board, ply, depth, mv, &quiets_tried);
                         break;
                     }
                 }
@@ -375,6 +401,9 @@ impl Worker {
     /// The first move is searched with the full window. Later moves get a null window just
     /// above `alpha`, and only at a node on the principal variation, when that score lands
     /// inside the window, a full-window re-search (principal variation search).
+    ///
+    /// A move with a `reduction` is first searched that many plies shallower with the null
+    /// window, and searched again at full depth only if it beats `alpha` there.
     #[expect(
         clippy::too_many_arguments,
         reason = "a child search needs the node's full state; see #44 for a window type"
@@ -388,16 +417,63 @@ impl Worker {
         beta: i32,
         node: Node,
         move_number: u32,
+        reduction: u32,
     ) -> i32 {
+        debug_assert!(
+            reduction < depth.max(1),
+            "reduction {reduction} leaves no depth of {depth}"
+        );
         if move_number == 1 {
             return -self.negamax(child, depth, ply, -beta, -alpha, node);
         }
-        let score = -self.negamax(child, depth, ply, -alpha - 1, -alpha, Node::NonPv);
+        let mut score = -self.negamax(
+            child,
+            depth - reduction,
+            ply,
+            -alpha - 1,
+            -alpha,
+            Node::NonPv,
+        );
+        if reduction > 0 && score > alpha && !self.stopped {
+            score = -self.negamax(child, depth, ply, -alpha - 1, -alpha, Node::NonPv);
+        }
         if node == Node::Pv && score > alpha && score < beta && !self.stopped {
             -self.negamax(child, depth, ply, -beta, -alpha, Node::Pv)
         } else {
             score
         }
+    }
+
+    /// The plies by which to reduce the quiet move `mv` (late move reduction), which
+    /// reached `child` as the `move_number`th legal move from a node of kind `node`
+    /// searched to `depth` plies.
+    ///
+    /// Moves are reduced only from [`LMR_MIN_DEPTH`] on, after the first
+    /// [`LMR_FULL_DEPTH_MOVES`], and when they do not give check, by an amount from a table
+    /// that grows with the logarithms of the depth and move number. The reduction is a ply
+    /// smaller on the principal variation and smaller still for a move with good history,
+    /// and always leaves at least one ply to search. The caller rules out the other moves
+    /// that must not be reduced: those from a node in check, noisy moves, the
+    /// transposition table move and killer moves.
+    fn late_move_reduction(
+        &self,
+        child: &Board,
+        mv: Move,
+        node: Node,
+        depth: u32,
+        move_number: u32,
+    ) -> u32 {
+        if depth < LMR_MIN_DEPTH || move_number <= LMR_FULL_DEPTH_MOVES || child.in_check() {
+            return 0;
+        }
+        // The side that played mv is the one not to move in child.
+        let colour = !child.side_to_move();
+        let pv_bonus = u32::from(node == Node::Pv);
+        let history_bonus = (self.history.get(colour, mv) / LMR_HISTORY_DIVISOR).max(0);
+        let history_bonus = u32::try_from(history_bonus).expect("history bonus is not negative");
+        reduction::base_reduction(depth, move_number)
+            .saturating_sub(pv_bonus + history_bonus)
+            .min(depth - 2)
     }
 
     /// Gives the opponent a free move from `board`, `ply` plies from the root and `depth`
@@ -551,16 +627,14 @@ impl Worker {
         best
     }
 
-    /// Records that the quiet move `mv`, played by `colour`, caused a beta cutoff `ply`
-    /// plies from the root and `depth` plies deep, after the quiet moves `tried` failed to.
-    fn reward_quiet_cutoff(
-        &mut self,
-        colour: Colour,
-        ply: usize,
-        depth: u32,
-        mv: Move,
-        tried: &[Move],
-    ) {
+    /// Records that `mv` caused a beta cutoff in `board`, `ply` plies from the root and
+    /// `depth` plies deep, after the quiet moves `tried` failed to. Only a quiet move's
+    /// cutoff is recorded.
+    fn record_cutoff(&mut self, board: &Board, ply: usize, depth: u32, mv: Move, tried: &[Move]) {
+        if mv.is_noisy() {
+            return;
+        }
+        let colour = board.side_to_move();
         self.killers.update(ply, mv);
         let bonus = bonus(depth);
         self.history.update(colour, mv, bonus);
