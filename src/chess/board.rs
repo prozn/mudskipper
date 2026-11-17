@@ -4,6 +4,7 @@ mod draw;
 mod fen;
 mod make;
 mod movegen;
+mod see;
 
 pub use fen::ParseFenError;
 

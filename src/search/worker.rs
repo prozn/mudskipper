@@ -583,8 +583,10 @@ impl Worker {
     /// Searches only noisy moves from `board`, `ply` plies from the root, until the
     /// position is quiet, and returns its score within the window `alpha` to `beta`.
     ///
-    /// The side to move may stand pat on the static evaluation instead of capturing.
-    /// In check it may not, and every evasion is searched so that mates are seen.
+    /// The side to move may stand pat on the static evaluation instead of capturing, and
+    /// noisy moves that lose material by static exchange evaluation are skipped, the TT
+    /// move included. In check it may not stand pat, and every evasion is searched so that
+    /// mates are seen.
     ///
     /// Stalemate is not detected when the side to move is not in check: it stands pat on
     /// the static evaluation even with no legal move. Detecting it would need a full
@@ -640,7 +642,7 @@ impl Worker {
                 return best;
             }
             alpha = alpha.max(best);
-            MovePicker::noisy(board, tt_move)
+            MovePicker::good_noisy(board, tt_move)
         };
 
         let mut best_move = None;
