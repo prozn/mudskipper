@@ -94,7 +94,7 @@ Searching a node one ply deeper than usual because the side to move is in check,
 **Pruning** a node off the principal variation by letting the side to move pass: if a reduced-depth search after the pass still fails high, the node returns the cutoff without searching its moves. It is tried only when the static evaluation is at least beta, and not in check, straight after another pass, or when the side to move has only its king and pawns, where zugzwang makes passing unsound.
 
 **Late move reduction**:
-**Reduction** of a **Quiet move**, or a **Noisy move** that loses material by **Static exchange evaluation**, searched late at a node, after the first few moves, by a number of plies that grows with the logarithms of the depth and the move's number. The TT move, **Killer moves**, moves that give check and every move from a node in check are not reduced, and moves with good **History** or on the principal variation are reduced less. A reduced move that beats alpha is searched again at full depth.
+**Reduction** of a **Quiet move**, or a **Noisy move** that loses material by **Static exchange evaluation**, searched late at a node, after the first few moves, by a number of plies that grows with the logarithms of the depth and the move's number, more slowly for the **Noisy moves**. The TT move, **Killer moves**, moves that give check and every move from a node in check are not reduced, and moves with good **History** or on the principal variation are reduced less. A reduced move that beats alpha is searched again at full depth.
 _Avoid_: LMR (in prose)
 
 **Reverse futility pruning**:

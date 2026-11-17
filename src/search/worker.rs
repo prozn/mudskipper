@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use super::MAX_PLY;
 use super::history::{History, Killers, bonus};
 use super::ordering::MovePicker;
-use super::reduction;
+use super::reduction::{self, LateMove};
 use super::score::{self, DRAW, INFINITY, Score};
 use super::stop::StopFlag;
 use super::time::TimeLimit;
@@ -466,7 +466,9 @@ impl Worker {
     ///
     /// Moves are reduced only from [`LMR_MIN_DEPTH`] on, after the first
     /// [`LMR_FULL_DEPTH_MOVES`], and when they do not give check, by an amount from a table
-    /// that grows with the logarithms of the depth and move number. The reduction is a ply
+    /// that grows with the logarithms of the depth and move number, a milder one for noisy
+    /// moves than for quiet ones, as [`reduction::base_reduction`] describes. The reduction
+    /// is a ply
     /// smaller on the principal variation and, for a quiet move, smaller still with good
     /// history, and always leaves at least one ply to search. The caller rules out the
     /// other moves that must not be reduced: those from a node in check, noisy moves that
@@ -487,14 +489,14 @@ impl Worker {
         let colour = !child.side_to_move();
         let pv_bonus = u32::from(node == Node::Pv);
         // History is kept only for quiet moves.
-        let history = if mv.is_noisy() {
-            0
+        let (late_move, history) = if mv.is_noisy() {
+            (LateMove::BadNoisy, 0)
         } else {
-            self.history.get(colour, mv)
+            (LateMove::Quiet, self.history.get(colour, mv))
         };
         let history_bonus = (history / LMR_HISTORY_DIVISOR).max(0);
         let history_bonus = u32::try_from(history_bonus).expect("history bonus is not negative");
-        reduction::base_reduction(depth, move_number)
+        reduction::base_reduction(late_move, depth, move_number)
             .saturating_sub(pv_bonus + history_bonus)
             .min(depth - 2)
     }
