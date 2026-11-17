@@ -10,6 +10,7 @@ use super::score::{self, DRAW, INFINITY, Score};
 use super::stop::StopFlag;
 use super::time::TimeLimit;
 use super::tt::{Bound, Entry, TranspositionTable};
+use super::window::Window;
 use crate::chess::{Board, Game, KeyHistory, Move, MoveList};
 use crate::eval;
 
@@ -262,34 +263,28 @@ impl Worker {
     /// the score lands inside it.
     fn search_root(&mut self, board: &Board, depth: u32, previous: Option<i32>) -> i32 {
         let mut delta = ASPIRATION_DELTA;
-        let (mut alpha, mut beta) = match previous {
-            Some(previous) if depth >= ASPIRATION_MIN_DEPTH => (
-                (previous - delta).max(-INFINITY),
-                (previous + delta).min(INFINITY),
-            ),
-            _ => (-INFINITY, INFINITY),
+        let mut window = match previous {
+            Some(previous) if depth >= ASPIRATION_MIN_DEPTH => Window::aspiration(previous, delta),
+            _ => Window::FULL,
         };
         loop {
-            let score = self.negamax(board, depth, 0, alpha, beta, Node::Pv);
-            if self.stopped {
+            let score = self.negamax(board, depth, 0, window, Node::Pv);
+            if self.stopped || window.contains(score) {
                 return score;
             }
-            if score <= alpha {
-                beta = alpha.midpoint(beta);
-                alpha = (score - delta).max(-INFINITY);
-            } else if score >= beta {
-                beta = (score + delta).min(INFINITY);
+            window = if score <= window.alpha() {
+                window.widened_down(score, delta)
             } else {
-                return score;
-            }
+                window.widened_up(score, delta)
+            };
             delta += delta / 2;
         }
     }
 
     /// Searches `board`, `ply` plies from the root, to `depth` plies and returns its score
-    /// within the window `alpha` to `beta`.
+    /// within `window`.
     ///
-    /// After the first move, each move is searched with a null window just above `alpha`
+    /// After the first move, each move is searched with a null window just above alpha
     /// (principal variation search). Only at a node on the principal variation, and only
     /// when the score lands inside the window, is the move searched again with the full
     /// window, to find its exact score.
@@ -304,7 +299,7 @@ impl Worker {
     /// limit just below [`MAX_PLY`], where a node returns its static evaluation.
     ///
     /// Off the principal variation and out of check, a node whose static evaluation is well
-    /// above `beta` may return a cutoff without searching its moves, as
+    /// above beta may return a cutoff without searching its moves, as
     /// [`Worker::eval_cutoff`] describes.
     ///
     /// A node at least [`IIR_MIN_DEPTH`] deep with no transposition table move is searched
@@ -315,7 +310,7 @@ impl Worker {
     /// [`Worker::late_move_reduction`] describes.
     ///
     /// At shallow nodes off the principal variation and out of check, the remaining quiet
-    /// moves are skipped once they look unable to raise `alpha` or enough moves have been
+    /// moves are skipped once they look unable to raise alpha or enough moves have been
     /// searched, as [`prunes_quiet`] describes.
     ///
     /// A quiet move causing a beta cutoff becomes a killer move at this ply and earns a
@@ -325,8 +320,7 @@ impl Worker {
         board: &Board,
         mut depth: u32,
         ply: usize,
-        mut alpha: i32,
-        beta: i32,
+        mut window: Window,
         node: Node,
     ) -> i32 {
         debug_assert!(ply < MAX_PLY, "ply {ply} is out of bounds");
@@ -336,7 +330,7 @@ impl Worker {
             depth += 1;
         }
         if depth == 0 {
-            return self.quiescence(board, ply, alpha, beta);
+            return self.quiescence(board, ply, window);
         }
         if self.should_stop() {
             return DRAW;
@@ -350,11 +344,11 @@ impl Worker {
         }
 
         let tt_entry = self.tt.probe(board.key(), ply);
-        if let Some(score) = tt_cutoff(tt_entry, node, depth, alpha, beta) {
+        if let Some(score) = tt_cutoff(tt_entry, node, depth, window) {
             return score;
         }
         let static_eval = self.record_static_eval(board, ply, in_check, tt_entry);
-        if let Some(score) = self.eval_cutoff(board, node, depth, ply, beta) {
+        if let Some(score) = self.eval_cutoff(board, node, depth, ply, window) {
             return score;
         }
         let tt_move = tt_move(board, tt_entry);
@@ -362,14 +356,14 @@ impl Worker {
             depth -= 1;
         }
 
-        let original_alpha = alpha;
+        let original_window = window;
         let mut best = -INFINITY;
         let mut best_move = None;
         let mut legal_moves = 0;
         let mut quiets_tried = MoveList::new();
         let mut picker = MovePicker::new(board, tt_move, self.killers.get(ply));
         while let Some(mv) = picker.next_move(&self.history) {
-            if prunes_quiet(mv, node, depth, static_eval, best, alpha, legal_moves) {
+            if prunes_quiet(mv, node, depth, static_eval, best, window, legal_moves) {
                 picker.skip_quiets();
                 continue;
             }
@@ -378,36 +372,31 @@ impl Worker {
             }
             legal_moves += 1;
             let child = board.make(mv);
-            let reduction = if !in_check && picker.is_handing_out_late_quiets() {
-                self.late_move_reduction(&child, mv, node, depth, legal_moves)
+            let order = if legal_moves == 1 {
+                Order::First
+            } else if !in_check && picker.is_handing_out_late_quiets() {
+                Order::Later {
+                    reduction: self.late_move_reduction(&child, mv, node, depth, legal_moves),
+                }
             } else {
-                0
+                Order::Later { reduction: 0 }
             };
             self.enter(board, ply, Reached::Move);
-            let score = self.search_child(
-                &child,
-                depth - 1,
-                ply + 1,
-                alpha,
-                beta,
-                node,
-                legal_moves,
-                reduction,
-            );
+            let score = self.search_child(&child, depth - 1, ply + 1, window, node, order);
             self.leave();
             if self.stopped {
                 return DRAW;
             }
             if score > best {
                 best = score;
-                if score > alpha {
-                    alpha = score;
+                if score > window.alpha() {
                     best_move = Some(mv);
                     self.pv.update(ply, mv);
-                    if score >= beta {
+                    if score >= window.beta() {
                         self.record_cutoff(board, ply, depth, mv, &quiets_tried);
                         break;
                     }
+                    window.raise_alpha(score);
                 }
             }
             if !mv.is_noisy() {
@@ -425,57 +414,46 @@ impl Worker {
                 score: best,
                 eval: static_eval,
                 depth,
-                bound: bound(best, original_alpha, beta),
+                bound: bound(best, original_window),
             },
         );
         best
     }
 
-    /// Searches `child`, the position after the `move_number`th legal move from a node of kind
-    /// `node` searched with the window `alpha` to `beta`, to `depth` plies at `ply`, and
-    /// returns its score from the parent's point of view.
+    /// Searches `child`, reached by the move at `order` from a node of kind `node` searched
+    /// with `window`, to `depth` plies at `ply`, and returns its score from the parent's
+    /// point of view.
     ///
     /// The first move is searched with the full window. Later moves get a null window just
-    /// above `alpha`, and only at a node on the principal variation, when that score lands
+    /// above alpha, and only at a node on the principal variation, when that score lands
     /// inside the window, a full-window re-search (principal variation search).
     ///
-    /// A move with a `reduction` is first searched that many plies shallower with the null
-    /// window, and searched again at full depth only if it beats `alpha` there.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "a child search needs the node's full state; see #44 for a window type"
-    )]
+    /// A move with a reduction is first searched that many plies shallower with the null
+    /// window, and searched again at full depth only if it beats alpha there.
     fn search_child(
         &mut self,
         child: &Board,
         depth: u32,
         ply: usize,
-        alpha: i32,
-        beta: i32,
+        window: Window,
         node: Node,
-        move_number: u32,
-        reduction: u32,
+        order: Order,
     ) -> i32 {
+        let reduction = match order {
+            Order::First => return -self.negamax(child, depth, ply, window.negated(), node),
+            Order::Later { reduction } => reduction,
+        };
         debug_assert!(
             reduction < depth.max(1),
             "reduction {reduction} leaves no depth of {depth}"
         );
-        if move_number == 1 {
-            return -self.negamax(child, depth, ply, -beta, -alpha, node);
+        let scout = window.null_above_alpha().negated();
+        let mut score = -self.negamax(child, depth - reduction, ply, scout, Node::NonPv);
+        if reduction > 0 && score > window.alpha() && !self.stopped {
+            score = -self.negamax(child, depth, ply, scout, Node::NonPv);
         }
-        let mut score = -self.negamax(
-            child,
-            depth - reduction,
-            ply,
-            -alpha - 1,
-            -alpha,
-            Node::NonPv,
-        );
-        if reduction > 0 && score > alpha && !self.stopped {
-            score = -self.negamax(child, depth, ply, -alpha - 1, -alpha, Node::NonPv);
-        }
-        if node == Node::Pv && score > alpha && score < beta && !self.stopped {
-            -self.negamax(child, depth, ply, -beta, -alpha, Node::Pv)
+        if node == Node::Pv && window.contains(score) && !self.stopped {
+            -self.negamax(child, depth, ply, window.negated(), Node::Pv)
         } else {
             score
         }
@@ -514,8 +492,8 @@ impl Worker {
     }
 
     /// Returns the score to cut off with at `board`, `ply` plies from the root and `depth`
-    /// plies deep, without searching its moves, if its static evaluation stands far
-    /// enough above `beta`: either the static evaluation itself, as
+    /// plies deep and searched with `window`, without searching its moves, if its static
+    /// evaluation stands far enough above beta: either the static evaluation itself, as
     /// [`reverse_futility_prunes`] describes, or the score of a null-move search, as
     /// [`Worker::null_move_cutoff`] describes. A node in check has no static evaluation
     /// and is never cut off.
@@ -525,33 +503,34 @@ impl Worker {
         node: Node,
         depth: u32,
         ply: usize,
-        beta: i32,
+        window: Window,
     ) -> Option<i32> {
         let eval = self.stack[ply].static_eval?;
-        if reverse_futility_prunes(node, depth, eval, beta) {
+        if reverse_futility_prunes(node, depth, eval, window.beta()) {
             return Some(eval);
         }
-        self.null_move_cutoff(board, node, depth, ply, beta)
+        self.null_move_cutoff(board, node, depth, ply, window)
     }
 
-    /// Gives the opponent a free move from `board`, `ply` plies from the root and `depth`
-    /// plies deep, and returns the score to cut off with if a reduced search still fails
-    /// high (null-move pruning).
+    /// Gives the opponent a free move from `board`, `ply` plies from the root, `depth`
+    /// plies deep and searched with `window`, and returns the score to cut off with if a
+    /// reduced search still fails high (null-move pruning).
     ///
     /// The null move is tried only off the principal variation, out of check, when the
-    /// static evaluation is at least `beta`, `beta` is not a mate score, and from
+    /// static evaluation is at least beta, beta is not a mate score, and from
     /// [`NMP_MIN_DEPTH`] on. It is not tried
     /// straight after another null move, or when the side to move has only its king and
     /// pawns, where being obliged to move can be a disadvantage (zugzwang) that passing
-    /// would hide. An unproven mate score is returned as `beta`.
+    /// would hide. An unproven mate score is returned as beta.
     fn null_move_cutoff(
         &mut self,
         board: &Board,
         node: Node,
         depth: u32,
         ply: usize,
-        beta: i32,
+        window: Window,
     ) -> Option<i32> {
+        let beta = window.beta();
         let frame = self.stack[ply];
         if node == Node::Pv
             || frame.static_eval.is_none_or(|eval| eval < beta)
@@ -569,8 +548,7 @@ impl Worker {
             &child,
             depth.saturating_sub(reduction + 1),
             ply + 1,
-            -beta,
-            -beta + 1,
+            window.null_below_beta().negated(),
             Node::NonPv,
         );
         self.leave();
@@ -581,7 +559,7 @@ impl Worker {
     }
 
     /// Searches only noisy moves from `board`, `ply` plies from the root, until the
-    /// position is quiet, and returns its score within the window `alpha` to `beta`.
+    /// position is quiet, and returns its score within `window`.
     ///
     /// The side to move may stand pat on the static evaluation instead of capturing, and
     /// noisy moves that lose material by static exchange evaluation are skipped, the TT
@@ -597,7 +575,7 @@ impl Worker {
     /// Every node probes the transposition table and returns an entry whose bound settles
     /// the window, and stores its result at depth 0, so that main search entries win
     /// replacement.
-    fn quiescence(&mut self, board: &Board, ply: usize, mut alpha: i32, beta: i32) -> i32 {
+    fn quiescence(&mut self, board: &Board, ply: usize, mut window: Window) -> i32 {
         if self.should_stop() {
             return DRAW;
         }
@@ -611,12 +589,12 @@ impl Worker {
 
         let tt_entry = self.tt.probe(board.key(), ply);
         if let Some(entry) = tt_entry
-            && entry.cuts_off(alpha, beta)
+            && entry.cuts_off(window)
         {
             return entry.score;
         }
 
-        let original_alpha = alpha;
+        let original_window = window;
         let in_check = board.in_check();
         let mut best = -INFINITY;
         let mut eval = None;
@@ -627,7 +605,7 @@ impl Worker {
             let static_eval = static_eval(board, tt_entry);
             eval = Some(static_eval);
             best = static_eval;
-            if best >= beta {
+            if best >= window.beta() {
                 self.tt.store(
                     board.key(),
                     ply,
@@ -636,12 +614,12 @@ impl Worker {
                         score: best,
                         eval,
                         depth: 0,
-                        bound: bound(best, original_alpha, beta),
+                        bound: bound(best, original_window),
                     },
                 );
                 return best;
             }
-            alpha = alpha.max(best);
+            window.raise_alpha(best);
             MovePicker::good_noisy(board, tt_move)
         };
 
@@ -654,19 +632,19 @@ impl Worker {
             legal_moves += 1;
             let child = board.make(mv);
             self.enter(board, ply, Reached::Move);
-            let score = -self.quiescence(&child, ply + 1, -beta, -alpha);
+            let score = -self.quiescence(&child, ply + 1, window.negated());
             self.leave();
             if self.stopped {
                 return DRAW;
             }
             if score > best {
                 best = score;
-                if score > alpha {
-                    alpha = score;
+                if score > window.alpha() {
                     best_move = Some(mv);
-                    if score >= beta {
+                    if score >= window.beta() {
                         break;
                     }
+                    window.raise_alpha(score);
                 }
             }
         }
@@ -681,7 +659,7 @@ impl Worker {
                 score: best,
                 eval,
                 depth: 0,
-                bound: bound(best, original_alpha, beta),
+                bound: bound(best, original_window),
             },
         );
         best
@@ -804,7 +782,7 @@ fn reverse_futility_prunes(node: Node, depth: u32, eval: i32, beta: i32) -> bool
 
 /// Reports whether `mv` is a quiet move that, with the quiet moves after it, may be
 /// skipped at a node of kind `node`, `depth` plies deep with static evaluation
-/// `static_eval`, given the best score `best` so far, the window's `alpha` and the
+/// `static_eval`, given the best score `best` so far, the node's `window` and the
 /// `legal_moves` already searched.
 ///
 /// Quiet moves are skipped only off the principal variation and out of check (where
@@ -812,7 +790,7 @@ fn reverse_futility_prunes(node: Node, depth: u32, eval: i32, beta: i32) -> bool
 /// not a mate, so that a node never skips every move and is mistaken for checkmate or
 /// stalemate, and a mate found below it is never hidden. Before any move is searched,
 /// `best` is `-INFINITY`, which counts as a mate score. Past that, they are skipped when the
-/// static evaluation plus a margin growing with depth cannot reach `alpha` (futility
+/// static evaluation plus a margin growing with depth cannot reach alpha (futility
 /// pruning), or once enough moves for the depth have been searched (late move pruning).
 fn prunes_quiet(
     mv: Move,
@@ -820,7 +798,7 @@ fn prunes_quiet(
     depth: u32,
     static_eval: Option<i32>,
     best: i32,
-    alpha: i32,
+    window: Window,
     legal_moves: u32,
 ) -> bool {
     let Some(eval) = static_eval else {
@@ -829,8 +807,8 @@ fn prunes_quiet(
     if mv.is_noisy() || node == Node::Pv || score::is_mate(best) {
         return false;
     }
-    let futile =
-        depth <= FP_MAX_DEPTH && eval + FP_BASE_MARGIN + FP_DEPTH_MARGIN * depth as i32 <= alpha;
+    let futile = depth <= FP_MAX_DEPTH
+        && eval + FP_BASE_MARGIN + FP_DEPTH_MARGIN * depth as i32 <= window.alpha();
     let late = depth <= LMP_MAX_DEPTH && legal_moves >= LMP_BASE_MOVES + depth * depth / 2;
     futile || late
 }
@@ -845,12 +823,12 @@ enum Node {
     NonPv,
 }
 
-/// The score of the transposition table `entry` if it settles the window `alpha` to
-/// `beta` for a node of kind `node` searched to `depth` plies: only off the principal
-/// variation, and only from an entry searched at least as deep.
-fn tt_cutoff(entry: Option<Entry>, node: Node, depth: u32, alpha: i32, beta: i32) -> Option<i32> {
+/// The score of the transposition table `entry` if it settles `window` for a node of kind
+/// `node` searched to `depth` plies: only off the principal variation, and only from an
+/// entry searched at least as deep.
+fn tt_cutoff(entry: Option<Entry>, node: Node, depth: u32, window: Window) -> Option<i32> {
     entry
-        .filter(|entry| node == Node::NonPv && entry.depth >= depth && entry.cuts_off(alpha, beta))
+        .filter(|entry| node == Node::NonPv && entry.depth >= depth && entry.cuts_off(window))
         .map(|entry| entry.score)
 }
 
@@ -880,6 +858,16 @@ impl Frame {
     };
 }
 
+/// Where a move falls in its node's move order, as the child search needs to know it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Order {
+    /// The first legal move, searched with the full window and never reduced.
+    First,
+    /// A later legal move, searched with a null window after a `reduction` of that many
+    /// plies (late move reduction), which may be none.
+    Later { reduction: u32 },
+}
+
 /// How the search reached a node from its parent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reached {
@@ -895,11 +883,11 @@ fn tt_move(board: &Board, entry: Option<Entry>) -> Option<Move> {
         .filter(|&mv| board.is_pseudo_legal(mv))
 }
 
-/// The bound of a fail-soft search of the window `alpha` to `beta` that returned `best`.
-fn bound(best: i32, alpha: i32, beta: i32) -> Bound {
-    if best >= beta {
+/// The bound of a fail-soft search of `window` that returned `best`.
+fn bound(best: i32, window: Window) -> Bound {
+    if best >= window.beta() {
         Bound::Lower
-    } else if best > alpha {
+    } else if best > window.alpha() {
         Bound::Exact
     } else {
         Bound::Upper
