@@ -302,8 +302,8 @@ impl Worker {
     /// one ply shallower: with no good move to try first, a full-depth search would mostly
     /// be wasted effort.
     ///
-    /// Late moves, every move but the TT move and the killers, are searched to a reduced
-    /// depth first, as [`Worker::late_move_reduction`] describes.
+    /// **Late moves** after the first few are searched to a reduced depth first, as
+    /// [`Worker::late_move_reduction`] describes.
     ///
     /// At shallow nodes off the principal variation and out of check, the remaining quiet
     /// moves are skipped once they look unable to raise alpha or enough moves have been
@@ -371,9 +371,11 @@ impl Worker {
             let child = board.make(mv);
             let order = if legal_moves == 1 {
                 Order::First
-            } else if !in_check && picker.is_handing_out_late_moves() {
-                let reduction =
-                    self.late_move_reduction(board, &child, mv, node, depth, legal_moves);
+            } else if !in_check
+                && picker.is_handing_out_late_moves()
+                && is_reducible(&child, depth, legal_moves)
+            {
+                let reduction = self.late_move_reduction(board, mv, node, depth, legal_moves);
                 Order::Later { reduction }
             } else {
                 Order::Later { reduction: 0 }
@@ -459,29 +461,22 @@ impl Worker {
     }
 
     /// The plies by which to reduce the late move `mv` from `board` (late move reduction),
-    /// which reached `child` as the `move_number`th legal move from a node of kind `node`
-    /// searched to `depth` plies.
+    /// the `move_number`th legal move searched from a node of kind `node` searched to
+    /// `depth` plies.
     ///
-    /// Moves are reduced only from [`LMR_MIN_DEPTH`] on, after the first
-    /// [`LMR_FULL_DEPTH_MOVES`], and when they do not give check, by an amount from a table
-    /// that grows with the logarithms of the depth and move number, a milder one for noisy
-    /// moves than for quiet ones, adjusted by the move's history, as
-    /// [`reduction::reduction`] describes. The reduction is a ply smaller on the principal
-    /// variation and always leaves at least one ply to search. The caller rules out the
-    /// other moves that must not be reduced: those from a node in check, the transposition
-    /// table move and killer moves.
+    /// The amount comes from a table that grows with the logarithms of the depth and move
+    /// number, a milder one for noisy moves than for quiet ones, adjusted by the move's
+    /// history, as [`reduction::reduction`] describes. The reduction is a ply smaller on
+    /// the principal variation and always leaves at least one ply to search. The caller
+    /// reduces only late moves that [`is_reducible`] allows, from a node not in check.
     fn late_move_reduction(
         &self,
         board: &Board,
-        child: &Board,
         mv: Move,
         node: Node,
         depth: u32,
         move_number: u32,
     ) -> u32 {
-        if depth < LMR_MIN_DEPTH || move_number <= LMR_FULL_DEPTH_MOVES || child.in_check() {
-            return 0;
-        }
         let late_move = if mv.is_noisy() {
             LateMove::Noisy {
                 history: self.history.noisy().get(board, mv),
@@ -787,6 +782,14 @@ fn reverse_futility_prunes(node: Node, depth: u32, eval: i32, beta: i32) -> bool
         && depth <= RFP_MAX_DEPTH
         && !score::is_mate(beta)
         && eval - RFP_MARGIN * depth as i32 >= beta
+}
+
+/// Reports whether a late move that reached `child` as the `move_number`th legal move
+/// searched, from a node `depth` plies deep not in check, may be reduced (late move
+/// reduction): only from [`LMR_MIN_DEPTH`] on, after the first [`LMR_FULL_DEPTH_MOVES`],
+/// and when it does not give check. The attack test for check comes last, as the costliest.
+fn is_reducible(child: &Board, depth: u32, move_number: u32) -> bool {
+    depth >= LMR_MIN_DEPTH && move_number > LMR_FULL_DEPTH_MOVES && !child.in_check()
 }
 
 /// Reports whether `mv` is a quiet move that, with the quiet moves after it, may be

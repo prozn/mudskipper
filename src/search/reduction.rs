@@ -2,12 +2,12 @@
 //! they, and with them the **Bench signature**, are the same on every platform, and the
 //! history adjustments made to them.
 
-/// A late move to reduce, with its history in the table for its kind.
+/// A **Late move** to reduce, with its history in the table for its kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LateMove {
-    /// A quiet move after the killers, with its quiet history.
+    /// A quiet late move, with its quiet history.
     Quiet { history: i32 },
-    /// A noisy move other than the TT move, good or bad, with its noisy history.
+    /// A noisy late move, good or bad, with its noisy history.
     Noisy { history: i32 },
 }
 
@@ -17,25 +17,18 @@ pub(super) enum LateMove {
 const HISTORY_DIVISOR: i32 = 8_192;
 
 /// The plies `late_move` is reduced by at `depth` plies deep when it is the
-/// `move_number`th legal move searched, before the search's own adjustments: the base
-/// reduction for its kind, as [`base_reduction`] describes, lowered by a ply for each
+/// `move_number`th legal move searched, before the search's own adjustments: the entry in
+/// its table, [`QUIET_TABLE`] or [`NOISY_TABLE`], lowered by a ply for each
 /// [`HISTORY_DIVISOR`] of its history, and never below zero. For a quiet move, negative
 /// history is ignored; for a noisy move, it raises the reduction by as much.
 pub(super) fn reduction(late_move: LateMove, depth: u32, move_number: u32) -> u32 {
-    let (kind, history_bonus) = match late_move {
-        LateMove::Quiet { history } => (Kind::Quiet, (history / HISTORY_DIVISOR).max(0)),
-        LateMove::Noisy { history } => (Kind::Noisy, history / HISTORY_DIVISOR),
+    let (table, history_bonus) = match late_move {
+        LateMove::Quiet { history } => (&QUIET_TABLE, (history / HISTORY_DIVISOR).max(0)),
+        LateMove::Noisy { history } => (&NOISY_TABLE, history / HISTORY_DIVISOR),
     };
-    let base =
-        i32::try_from(base_reduction(kind, depth, move_number)).expect("table entries fit in a u8");
+    let index = |n: u32| usize::try_from(n).map_or(TABLE_SIZE - 1, |n| n.min(TABLE_SIZE - 1));
+    let base = i32::from(table[index(depth)][index(move_number)]);
     u32::try_from((base - history_bonus).max(0)).expect("the reduction is not negative")
-}
-
-/// The kind of late move, each with its own table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
-    Quiet,
-    Noisy,
 }
 
 /// A reduction of `base + ln(depth) * ln(move number) / divisor` plies, rounded down, with
@@ -59,8 +52,8 @@ const QUIET: Formula = Formula {
 
 /// The noisy move formula: 0.14 + ln(depth) * ln(move number) / 3.65. Noisy moves are
 /// forcing, so they are reduced less than quiet moves. Weiss's capture table is the model,
-/// but relative to mudskipper's own quiet table: the constants are [`QUIET`]'s, scaled by the ratios between Weiss's capture and quiet tables
-/// (0.38 + ln·ln / 3.76 against 2.01 + ln·ln / 2.32): the base by 0.38 / 2.01 and the
+/// but relative to mudskipper's own quiet table: the constants are [`QUIET`]'s, scaled by
+/// the ratios between Weiss's capture and quiet tables (0.38 + ln·ln / 3.76 against 2.01 + ln·ln / 2.32): the base by 0.38 / 2.01 and the
 /// divisor by 3.76 / 2.32, rounded to two decimal places.
 const NOISY: Formula = Formula {
     base_numerator: 7,
@@ -69,8 +62,7 @@ const NOISY: Formula = Formula {
     divisor_denominator: 20,
 };
 
-/// The tables cover depths and move numbers below this; larger ones use their last
-/// entries.
+/// The tables cover depths and move numbers below this.
 const TABLE_SIZE: usize = 64;
 
 /// Fractional bits of the fixed-point logarithms.
@@ -83,8 +75,8 @@ const MANTISSA_BITS: u32 = 62;
 /// The natural logarithm of 2 in fixed point with [`FRACTION_BITS`] fractional bits.
 const LN_2: u128 = 2_977_044_472;
 
-/// A reduction for each depth and move number below [`TABLE_SIZE`], with 0 where either
-/// is 0.
+/// A reduction, before history, for each depth and move number below [`TABLE_SIZE`], with
+/// 0 where either is 0. Larger depths and move numbers use the last entries.
 type Table = [[u8; TABLE_SIZE]; TABLE_SIZE];
 
 /// The [`QUIET`] reductions.
@@ -92,18 +84,6 @@ static QUIET_TABLE: Table = build_table(&QUIET);
 
 /// The [`NOISY`] reductions.
 static NOISY_TABLE: Table = build_table(&NOISY);
-
-/// The plies a late move of `kind` is reduced by, before history, at `depth` plies deep
-/// when it is the `move_number`th legal move searched, by the [`QUIET`] or [`NOISY`]
-/// formula.
-fn base_reduction(kind: Kind, depth: u32, move_number: u32) -> u32 {
-    let table = match kind {
-        Kind::Quiet => &QUIET_TABLE,
-        Kind::Noisy => &NOISY_TABLE,
-    };
-    let index = |n: u32| usize::try_from(n).map_or(TABLE_SIZE - 1, |n| n.min(TABLE_SIZE - 1));
-    u32::from(table[index(depth)][index(move_number)])
-}
 
 /// Builds a table of `formula` from fixed-point logarithms, so that no platform-dependent
 /// floating point is involved.
@@ -163,36 +143,41 @@ const fn log2(n: u32) -> u128 {
 mod tests {
     use super::*;
 
+    /// A quiet move at zero history, which takes its table entry unchanged.
+    const QUIET_BASE: LateMove = LateMove::Quiet { history: 0 };
+    /// A noisy move at zero history, which takes its table entry unchanged.
+    const NOISY_BASE: LateMove = LateMove::Noisy { history: 0 };
+
     #[test]
     fn worked_examples_match_the_logarithmic_formulas() {
         // floor(0.75 + ln(depth) * ln(move number) / 2.25) for quiet moves and
         // floor(0.14 + ln(depth) * ln(move number) / 3.65) for noisy moves, worked by hand.
-        for (kind, depth, move_number, expected) in [
-            (Kind::Quiet, 1, 30, 0),
-            (Kind::Quiet, 2, 2, 0),
-            (Kind::Quiet, 3, 4, 1),
-            (Kind::Quiet, 10, 20, 3),
-            (Kind::Quiet, 20, 40, 5),
-            (Kind::Quiet, 63, 63, 8),
-            (Kind::Noisy, 1, 30, 0),
-            (Kind::Noisy, 3, 4, 0),
-            (Kind::Noisy, 4, 10, 1),
-            (Kind::Noisy, 8, 20, 1),
-            (Kind::Noisy, 16, 30, 2),
-            (Kind::Noisy, 20, 40, 3),
-            (Kind::Noisy, 63, 63, 4),
+        for (late_move, depth, move_number, expected) in [
+            (QUIET_BASE, 1, 30, 0),
+            (QUIET_BASE, 2, 2, 0),
+            (QUIET_BASE, 3, 4, 1),
+            (QUIET_BASE, 10, 20, 3),
+            (QUIET_BASE, 20, 40, 5),
+            (QUIET_BASE, 63, 63, 8),
+            (NOISY_BASE, 1, 30, 0),
+            (NOISY_BASE, 3, 4, 0),
+            (NOISY_BASE, 4, 10, 1),
+            (NOISY_BASE, 8, 20, 1),
+            (NOISY_BASE, 16, 30, 2),
+            (NOISY_BASE, 20, 40, 3),
+            (NOISY_BASE, 63, 63, 4),
         ] {
             assert_eq!(
-                base_reduction(kind, depth, move_number),
+                reduction(late_move, depth, move_number),
                 expected,
-                "{kind:?} at depth {depth}, move number {move_number}"
+                "{late_move:?} at depth {depth}, move number {move_number}"
             );
         }
     }
 
     #[test]
     fn every_entry_matches_floating_point_away_from_rounding_boundaries() {
-        for (kind, base, divisor) in [(Kind::Quiet, 0.75, 2.25), (Kind::Noisy, 0.14, 3.65)] {
+        for (late_move, base, divisor) in [(QUIET_BASE, 0.75, 2.25), (NOISY_BASE, 0.14, 3.65)] {
             for depth in 1..64 {
                 for move_number in 1..64 {
                     let exact =
@@ -209,9 +194,9 @@ mod tests {
                     )]
                     let expected = exact.floor() as u32;
                     assert_eq!(
-                        base_reduction(kind, depth, move_number),
+                        reduction(late_move, depth, move_number),
                         expected,
-                        "{kind:?} at depth {depth}, move number {move_number}, exact {exact}"
+                        "{late_move:?} at depth {depth}, move number {move_number}, exact {exact}"
                     );
                 }
             }
@@ -222,8 +207,8 @@ mod tests {
     fn noisy_moves_are_reduced_less_than_quiet_moves() {
         for depth in 1..64 {
             for move_number in 1..64 {
-                let noisy = base_reduction(Kind::Noisy, depth, move_number);
-                let quiet = base_reduction(Kind::Quiet, depth, move_number);
+                let noisy = reduction(NOISY_BASE, depth, move_number);
+                let quiet = reduction(QUIET_BASE, depth, move_number);
                 // Strictly less wherever moves are reduced at all: from depth 3 on and past
                 // the first move. Elsewhere both may round down to the same value.
                 if depth >= 3 && move_number >= 2 {
@@ -243,16 +228,16 @@ mod tests {
 
     #[test]
     fn depths_and_move_numbers_past_the_table_use_its_last_entries() {
-        for kind in [Kind::Quiet, Kind::Noisy] {
+        for late_move in [QUIET_BASE, NOISY_BASE] {
             assert_eq!(
-                base_reduction(kind, 200, 63),
-                base_reduction(kind, 63, 63),
-                "{kind:?}"
+                reduction(late_move, 200, 63),
+                reduction(late_move, 63, 63),
+                "{late_move:?}"
             );
             assert_eq!(
-                base_reduction(kind, 63, 500),
-                base_reduction(kind, 63, 63),
-                "{kind:?}"
+                reduction(late_move, 63, 500),
+                reduction(late_move, 63, 63),
+                "{late_move:?}"
             );
         }
     }

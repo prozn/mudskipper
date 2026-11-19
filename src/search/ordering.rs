@@ -153,8 +153,8 @@ impl<'board> MovePicker<'board> {
         Some(mv) == self.tt_move || self.killers.contains(&Some(mv))
     }
 
-    /// Reports whether the move the picker last handed out is a late move: a noisy move,
-    /// good or bad, or a quiet move, that is neither the TT move nor a killer.
+    /// Reports whether the move the picker last handed out is a **Late move**: neither the
+    /// TT move nor a killer.
     pub(super) fn is_handing_out_late_moves(&self) -> bool {
         matches!(
             self.stage,

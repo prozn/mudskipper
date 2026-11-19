@@ -101,8 +101,11 @@ Searching a node one ply deeper than usual because the side to move is in check,
 **Null-move pruning**:
 **Pruning** a node off the principal variation by letting the side to move pass: if a reduced-depth search after the pass still fails high, the node returns the cutoff without searching its moves. It is tried only when the static evaluation is at least beta, and not in check, straight after another pass, or when the side to move has only its king and pawns, where zugzwang makes passing unsound.
 
+**Late move**:
+A move at a node other than the TT move and the **Killer moves**: any **Noisy move**, good or bad, and any other **Quiet move**. Late does not mean last: good noisy moves are searched before the killers.
+
 **Late move reduction**:
-**Reduction** of a **Quiet move** or **Noisy move** searched late at a node, after the first few moves, by a number of plies that grows with the logarithms of the depth and the move's number, more slowly for **Noisy moves**. The TT move, **Killer moves**, moves that give check and every move from a node in check are not reduced. Moves on the principal variation, quiet moves with good **Quiet history** and noisy moves with good **Noisy history** are reduced less, and noisy moves with poor **Noisy history** are reduced more. A reduced move that beats alpha is searched again at full depth.
+**Reduction** of a **Late move** searched after the first few moves at a node, by a number of plies that grows with the logarithms of the depth and the move's number, more slowly for a **Noisy move** than for a **Quiet move**. Moves that give check and every move from a node in check are not reduced. Moves on the principal variation, a **Quiet move** with good **Quiet history** and a **Noisy move** with good **Noisy history** are reduced less, and a **Noisy move** with poor **Noisy history** is reduced more. A reduced move that beats alpha is searched again at full depth.
 _Avoid_: LMR (in prose)
 
 **Reverse futility pruning**:
@@ -114,5 +117,5 @@ _Avoid_: Static null-move pruning, RFP (in prose)
 _Avoid_: FP (in prose)
 
 **Late move pruning**:
-**Pruning** the remaining **Quiet moves** at a shallow node off the principal variation, not in check, once a number of moves that grows with depth has been searched, the best of them with a score that is not a mate. **Noisy moves** are still searched.
+**Pruning** the remaining **Quiet moves** at a shallow node off the principal variation, not in check, once a number of moves that grows with depth has been searched, the best of them with a score that is not a mate. **Killer moves** are pruned too, so it covers more than the **Late moves** that are quiet. **Noisy moves** are still searched.
 _Avoid_: Move count pruning, LMP (in prose)
