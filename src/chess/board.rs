@@ -11,6 +11,7 @@ pub use fen::ParseFenError;
 use super::attacks;
 use super::bitboard::Bitboard;
 use super::castling::CastlingRights;
+use super::moves::Move;
 use super::piece::{Colour, EN_PASSANT_CAPTURER_RANK, Piece, PieceType};
 use super::square::Square;
 use super::zobrist::{self, Key};
@@ -50,6 +51,26 @@ impl Board {
     #[must_use]
     pub const fn piece_at(&self, square: Square) -> Option<Piece> {
         self.mailbox[square.index()]
+    }
+
+    /// The type of piece `mv` captures, a pawn for en passant, or `None` if it captures
+    /// nothing.
+    ///
+    /// # Panics
+    ///
+    /// May panic if `mv` is not pseudo-legal in this position.
+    #[must_use]
+    pub fn captured(&self, mv: Move) -> Option<PieceType> {
+        if mv.is_en_passant() {
+            Some(PieceType::Pawn)
+        } else if mv.is_capture() {
+            let victim = self
+                .piece_at(mv.to())
+                .unwrap_or_else(|| panic!("{mv} captures nothing in {}", self.to_fen()));
+            Some(victim.piece_type())
+        } else {
+            None
+        }
     }
 
     /// Squares holding a piece of type `piece_type` belonging to `colour`.
