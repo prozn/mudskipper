@@ -2,10 +2,10 @@
 //! only when the search reaches it: the transposition table's move, never generated; then
 //! the good noisy moves, which static exchange evaluation finds do not lose material, by
 //! most valuable victim, least valuable attacker; then the killer moves; then the other
-//! quiet moves by history; then the bad noisy moves, which lose material, in the same order
-//! as the good ones. A cutoff in an early stage skips generating the later ones.
+//! quiet moves by quiet history; then the bad noisy moves, which lose material, in the
+//! same order as the good ones. A cutoff in an early stage skips generating the later ones.
 
-use super::history::History;
+use super::history::QuietHistory;
 use crate::chess::{Board, Move, MoveList, PieceType};
 
 /// Rough piece values for ordering captures, indexed by [`PieceType::index`].
@@ -46,9 +46,9 @@ enum Stage {
 /// Pseudo-legal moves handed out best first, each once, generating and ordering each
 /// stage's moves only when it is reached.
 ///
-/// It is not an [`Iterator`] because ordering quiet moves reads the worker's [`History`],
-/// which the search updates between moves: [`MovePicker::next_move`] borrows it afresh
-/// for each move.
+/// It is not an [`Iterator`] because ordering quiet moves reads the worker's
+/// [`QuietHistory`], which the search updates between moves: [`MovePicker::next_move`]
+/// borrows it afresh for each move.
 pub(super) struct MovePicker<'board> {
     board: &'board Board,
     tt_move: Option<Move>,
@@ -167,7 +167,7 @@ impl<'board> MovePicker<'board> {
 
     /// Hands out the next move, best first, or `None` once every move has been handed
     /// out. Quiet moves are ordered by `history` as it stands when they are generated.
-    pub(super) fn next_move(&mut self, history: &History) -> Option<Move> {
+    pub(super) fn next_move(&mut self, history: &QuietHistory) -> Option<Move> {
         loop {
             match self.stage {
                 Stage::TtMove => {
@@ -288,7 +288,7 @@ mod tests {
     }
 
     /// Every move `picker` hands out, in order.
-    fn drain(mut picker: MovePicker<'_>, history: &History) -> Vec<Move> {
+    fn drain(mut picker: MovePicker<'_>, history: &QuietHistory) -> Vec<Move> {
         std::iter::from_fn(|| picker.next_move(history)).collect()
     }
 
@@ -301,7 +301,7 @@ mod tests {
         killers: [Option<Move>; 2],
     ) -> Result<(), TestCaseError> {
         let fen = board.to_fen();
-        let history = History::new();
+        let history = QuietHistory::new();
         let all = drain(MovePicker::new(board, tt_move, killers), &history);
         prop_assert_eq!(
             sorted(all.iter().copied()),
@@ -391,7 +391,7 @@ mod tests {
         let killer = board_move(&board, "h1g2");
         let liked = board_move(&board, "d1d3");
         let disliked = board_move(&board, "f3g1");
-        let mut history = History::new();
+        let mut history = QuietHistory::new();
         history.update(Colour::White, liked, 1_000);
         history.update(Colour::White, disliked, -1_000);
         let order: Vec<String> = drain(
@@ -415,10 +415,13 @@ mod tests {
         // or the bishop.
         let board =
             Board::from_fen("4k3/8/8/2r1q3/3P4/B4N2/P7/3Q3K w - - 0 1").expect("test FEN is valid");
-        let order: Vec<String> = drain(MovePicker::new(&board, None, [None; 2]), &History::new())
-            .iter()
-            .map(Move::to_string)
-            .collect();
+        let order: Vec<String> = drain(
+            MovePicker::new(&board, None, [None; 2]),
+            &QuietHistory::new(),
+        )
+        .iter()
+        .map(Move::to_string)
+        .collect();
         let first_quiet = order
             .iter()
             .position(|mv| !board_move(&board, mv).is_noisy())
@@ -434,7 +437,7 @@ mod tests {
         let killer = board_move(&board, "e1f1");
         let order: Vec<String> = drain(
             MovePicker::new(&board, None, [Some(killer), None]),
-            &History::new(),
+            &QuietHistory::new(),
         )
         .iter()
         .map(Move::to_string)
@@ -452,7 +455,7 @@ mod tests {
         // Nxd5 cxd5 breaks even, but Qxd5 cxd5 loses the queen for a knight.
         let board =
             Board::from_fen("4k3/8/2p5/3n4/8/4N3/8/3QK3 w - - 0 1").expect("test FEN is valid");
-        let history = History::new();
+        let history = QuietHistory::new();
         for tt_move in [None, Some(board_move(&board, "d1d5"))] {
             let handed_out: Vec<String> = drain(MovePicker::good_noisy(&board, tt_move), &history)
                 .iter()
@@ -467,7 +470,7 @@ mod tests {
         let board =
             Board::from_fen("4k3/8/8/2r1q3/3P4/B4N2/P7/3Q3K w - - 0 1").expect("test FEN is valid");
         let killer = board_move(&board, "h1g2");
-        let history = History::new();
+        let history = QuietHistory::new();
 
         let mut picker = MovePicker::new(&board, None, [Some(killer), None]);
         let first = picker.next_move(&history).map(|mv| mv.to_string());
