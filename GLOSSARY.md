@@ -70,7 +70,7 @@ A move that neither captures nor promotes, including castling. Every move is eit
 _Avoid_: Non-capture (includes non-capturing promotions), silent move
 
 **Static exchange evaluation**:
-Working out what a move wins or loses in material once the captures on its target square are played out, each side capturing with its least valuable attacker, including sliders uncovered behind earlier capturers, and free to stop when capturing on would lose. Pins are ignored. A **Noisy move** is good when it loses no more material by it than its ordering score allows, which grows with its victim's value and its **Noisy history**, and bad when it loses more; strong history can make a slightly losing capture good, and poor history can make an even one bad. Bad ones are searched after the **Quiet moves** and skipped by quiescence search out of check.
+Working out what a move wins or loses in material once the captures on its target square are played out, each side capturing with its least valuable attacker, including sliders uncovered behind earlier capturers, and free to stop when capturing on would lose. Pins are ignored. A **Noisy move** is good when it loses no more material by it than its ordering score allows, which grows with its victim's value and its **Noisy history**, and bad when it loses more; strong history can make a slightly losing capture good, and poor history can make an even one bad. Bad ones are searched after the **Quiet moves**. Quiescence search out of check ignores history: it skips every noisy move that loses material by it.
 _Avoid_: SEE (in prose), exchange evaluation
 
 **Killer move**:
