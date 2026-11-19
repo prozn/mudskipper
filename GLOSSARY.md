@@ -105,7 +105,7 @@ Searching a node one ply deeper than usual because the side to move is in check,
 A move at a node other than the TT move and the **Killer moves**: any **Noisy move**, good or bad, and any other **Quiet move**. Late does not mean last: good noisy moves are searched before the killers.
 
 **Late move reduction**:
-**Reduction** of a **Late move** searched after the first few moves at a node, by a number of plies that grows with the logarithms of the depth and the move's number, more slowly for a **Noisy move** than for a **Quiet move**. Moves that give check and every move from a node in check are not reduced. Moves on the principal variation, a **Quiet move** with good **Quiet history** and a **Noisy move** with good **Noisy history** are reduced less, and a **Noisy move** with poor **Noisy history** is reduced more. A reduced move that beats alpha is searched again at full depth.
+**Reduction** of a **Late move** searched after the first few moves at a node, by a number of plies that grows with the logarithms of the depth and the move's number, more slowly for a **Noisy move** than for a **Quiet move**. Moves that give check and every move from a node in check are not reduced. Moves on the principal variation, a **Quiet move** with good **Quiet history** and a **Noisy move** with good **Noisy history** are reduced less. A reduced move that beats alpha is searched again at full depth.
 _Avoid_: LMR (in prose)
 
 **Reverse futility pruning**:

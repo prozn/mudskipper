@@ -11,24 +11,26 @@ pub(super) enum LateMove {
     Noisy { history: i32 },
 }
 
-/// A late move is reduced a ply less for each this much history: about 2 plies at the
-/// maximum history. Quiet moves are helped only by positive history; noisy moves are also
-/// reduced more by negative history. Lowering it lets history move the reduction more.
+/// A late move is reduced a ply less for each this much history, if its history is
+/// positive: about 2 plies at the maximum history. Lowering it lets history protect more
+/// moves from reduction.
 const HISTORY_DIVISOR: i32 = 8_192;
 
 /// The plies `late_move` is reduced by at `depth` plies deep when it is the
 /// `move_number`th legal move searched, before the search's own adjustments: the entry in
 /// its table, [`QUIET_TABLE`] or [`NOISY_TABLE`], lowered by a ply for each
-/// [`HISTORY_DIVISOR`] of its history, and never below zero. For a quiet move, negative
-/// history is ignored; for a noisy move, it raises the reduction by as much.
+/// [`HISTORY_DIVISOR`] of positive history, and never below zero. Negative history is
+/// ignored.
 pub(super) fn reduction(late_move: LateMove, depth: u32, move_number: u32) -> u32 {
-    let (table, history_bonus) = match late_move {
-        LateMove::Quiet { history } => (&QUIET_TABLE, (history / HISTORY_DIVISOR).max(0)),
-        LateMove::Noisy { history } => (&NOISY_TABLE, history / HISTORY_DIVISOR),
+    let (table, history) = match late_move {
+        LateMove::Quiet { history } => (&QUIET_TABLE, history),
+        LateMove::Noisy { history } => (&NOISY_TABLE, history),
     };
     let index = |n: u32| usize::try_from(n).map_or(TABLE_SIZE - 1, |n| n.min(TABLE_SIZE - 1));
-    let base = i32::from(table[index(depth)][index(move_number)]);
-    u32::try_from((base - history_bonus).max(0)).expect("the reduction is not negative")
+    let base = u32::from(table[index(depth)][index(move_number)]);
+    // Negative history fails the conversion and counts as none.
+    let history_bonus = u32::try_from(history / HISTORY_DIVISOR).unwrap_or(0);
+    base.saturating_sub(history_bonus)
 }
 
 /// A reduction of `base + ln(depth) * ln(move number) / divisor` plies, rounded down, with
@@ -255,17 +257,9 @@ mod tests {
     }
 
     #[test]
-    fn noisy_history_lowers_or_raises_the_reduction_by_up_to_two_plies() {
+    fn good_noisy_history_lowers_the_reduction_and_bad_noisy_history_does_not_raise_it() {
         // Depth 20, move 40: a base of 3 noisy plies.
-        for (history, expected) in [
-            (-16_384, 5),
-            (-8_192, 4),
-            (-8_191, 3),
-            (0, 3),
-            (8_191, 3),
-            (8_192, 2),
-            (16_384, 1),
-        ] {
+        for (history, expected) in [(-16_384, 3), (0, 3), (8_191, 3), (8_192, 2), (16_384, 1)] {
             assert_eq!(
                 reduction(LateMove::Noisy { history }, 20, 40),
                 expected,
