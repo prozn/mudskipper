@@ -77,8 +77,16 @@ _Avoid_: SEE (in prose), exchange evaluation
 A **Quiet move** that recently caused a beta cutoff at the same ply of the current search, tried in sibling nodes straight after the **Noisy moves**. Two are kept per ply, and they are forgotten at the start of each search.
 
 **History**:
-A score for each **Quiet move**, by colour, origin and destination square, that rises when the move causes a beta cutoff and falls when it was tried before another quiet move did. Quiet moves other than the **Killer moves** are searched in order of it. It is kept between searches and forgotten on `ucinewgame`.
-_Avoid_: History table (except for the butterfly array itself), key history (that is the record of earlier positions for **Repetition**)
+**Quiet history** and **Noisy history** together: scores learned from beta cutoffs, kept between searches and forgotten on `ucinewgame`.
+_Avoid_: History table (except for one of the arrays itself), key history (that is the record of earlier positions for **Repetition**)
+
+**Quiet history**:
+The **History** of each **Quiet move**, by colour, origin and destination square, that rises when the move causes a beta cutoff and falls when it was tried before another quiet move did. Quiet moves other than the **Killer moves** are searched in order of it.
+_Avoid_: Butterfly history (except for its indexing)
+
+**Noisy history**:
+The **History** of each **Noisy move**, by colour, moved piece, destination square and captured piece, that rises when the move causes a beta cutoff and falls when it was tried before any other move did. A promotion that captures nothing counts as capturing a pawn. Noisy moves are ordered by the value of what they capture plus it.
+_Avoid_: Capture history (the usual name elsewhere, but it leaves out non-capturing promotions), tactical history
 
 **Principal variation search**:
 Searching the first move at a node with the full window and every later move with a null window just above alpha, which only proves the move is no better. At a node on the principal variation, a move whose null-window score lands inside the window is searched again with the full window for its exact score.
@@ -94,7 +102,7 @@ Searching a node one ply deeper than usual because the side to move is in check,
 **Pruning** a node off the principal variation by letting the side to move pass: if a reduced-depth search after the pass still fails high, the node returns the cutoff without searching its moves. It is tried only when the static evaluation is at least beta, and not in check, straight after another pass, or when the side to move has only its king and pawns, where zugzwang makes passing unsound.
 
 **Late move reduction**:
-**Reduction** of a **Quiet move** searched late at a node, after the first few moves, by a number of plies that grows with the logarithms of the depth and the move's number. The TT move, **Killer moves**, moves that give check and every move from a node in check are not reduced, and moves with good **History** or on the principal variation are reduced less. A reduced move that beats alpha is searched again at full depth.
+**Reduction** of a **Quiet move** searched late at a node, after the first few moves, by a number of plies that grows with the logarithms of the depth and the move's number. The TT move, **Killer moves**, moves that give check and every move from a node in check are not reduced, and moves with good **Quiet history** or on the principal variation are reduced less. A reduced move that beats alpha is searched again at full depth.
 _Avoid_: LMR (in prose)
 
 **Reverse futility pruning**:
