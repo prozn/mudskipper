@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use super::MAX_PLY;
 use super::history::{History, Killers};
 use super::ordering::MovePicker;
-use super::reduction;
+use super::reduction::{self, LateMove};
 use super::score::{self, DRAW, INFINITY, Score};
 use super::stop::StopFlag;
 use super::time::TimeLimit;
@@ -53,7 +53,7 @@ const NMP_BASE_REDUCTION: u32 = 3;
 /// nodes, where a missed threat is more likely to be found again later, are reduced more.
 const NMP_DEPTH_DIVISOR: u32 = 3;
 
-/// Shallowest depth at which late quiet moves are reduced, the threshold common among
+/// Shallowest depth at which late moves are reduced, the threshold common among
 /// open-source engines at a similar stage. Below it the reduced search would be little
 /// more than quiescence.
 const LMR_MIN_DEPTH: u32 = 3;
@@ -61,14 +61,10 @@ const LMR_MIN_DEPTH: u32 = 3;
 // A reduction capped at depth - 2 must not underflow.
 const _: () = assert!(LMR_MIN_DEPTH >= 2, "LMR_MIN_DEPTH must be at least 2");
 
-/// The number of legal moves searched at each node before later quiet moves are reduced,
+/// The number of legal moves searched at each node before later moves are reduced,
 /// as common among open-source engines at a similar stage. Raising it searches more moves
 /// at full depth.
 const LMR_FULL_DEPTH_MOVES: u32 = 3;
-
-/// A late move is reduced a ply less for each this much history, if its history is
-/// positive. Lowering it lets history protect more moves from reduction.
-const LMR_HISTORY_DIVISOR: i32 = 8_192;
 
 /// Deepest depth at which a node may return its static evaluation without searching
 /// (reverse futility pruning), within the range of 6 to 8 common among open-source engines
@@ -306,8 +302,8 @@ impl Worker {
     /// one ply shallower: with no good move to try first, a full-depth search would mostly
     /// be wasted effort.
     ///
-    /// Late quiet moves are searched to a reduced depth first, as
-    /// [`Worker::late_move_reduction`] describes.
+    /// Late moves, every move but the TT move and the killers, are searched to a reduced
+    /// depth first, as [`Worker::late_move_reduction`] describes.
     ///
     /// At shallow nodes off the principal variation and out of check, the remaining quiet
     /// moves are skipped once they look unable to raise alpha or enough moves have been
@@ -375,10 +371,10 @@ impl Worker {
             let child = board.make(mv);
             let order = if legal_moves == 1 {
                 Order::First
-            } else if !in_check && picker.is_handing_out_late_quiets() {
-                Order::Later {
-                    reduction: self.late_move_reduction(&child, mv, node, depth, legal_moves),
-                }
+            } else if !in_check && picker.is_handing_out_late_moves() {
+                let reduction =
+                    self.late_move_reduction(board, &child, mv, node, depth, legal_moves);
+                Order::Later { reduction }
             } else {
                 Order::Later { reduction: 0 }
             };
@@ -462,19 +458,21 @@ impl Worker {
         }
     }
 
-    /// The plies by which to reduce the quiet move `mv` (late move reduction), which
-    /// reached `child` as the `move_number`th legal move from a node of kind `node`
+    /// The plies by which to reduce the late move `mv` from `board` (late move reduction),
+    /// which reached `child` as the `move_number`th legal move from a node of kind `node`
     /// searched to `depth` plies.
     ///
     /// Moves are reduced only from [`LMR_MIN_DEPTH`] on, after the first
     /// [`LMR_FULL_DEPTH_MOVES`], and when they do not give check, by an amount from a table
-    /// that grows with the logarithms of the depth and move number. The reduction is a ply
-    /// smaller on the principal variation and smaller still for a move with good history,
-    /// and always leaves at least one ply to search. The caller rules out the other moves
-    /// that must not be reduced: those from a node in check, noisy moves, the
-    /// transposition table move and killer moves.
+    /// that grows with the logarithms of the depth and move number, a milder one for noisy
+    /// moves than for quiet ones, adjusted by the move's history, as
+    /// [`reduction::reduction`] describes. The reduction is a ply smaller on the principal
+    /// variation and always leaves at least one ply to search. The caller rules out the
+    /// other moves that must not be reduced: those from a node in check, the transposition
+    /// table move and killer moves.
     fn late_move_reduction(
         &self,
+        board: &Board,
         child: &Board,
         mv: Move,
         node: Node,
@@ -484,13 +482,18 @@ impl Worker {
         if depth < LMR_MIN_DEPTH || move_number <= LMR_FULL_DEPTH_MOVES || child.in_check() {
             return 0;
         }
-        // The side that played mv is the one not to move in child.
-        let colour = !child.side_to_move();
+        let late_move = if mv.is_noisy() {
+            LateMove::Noisy {
+                history: self.history.noisy().get(board, mv),
+            }
+        } else {
+            LateMove::Quiet {
+                history: self.history.quiet().get(board.side_to_move(), mv),
+            }
+        };
         let pv_bonus = u32::from(node == Node::Pv);
-        let history_bonus = (self.history.quiet().get(colour, mv) / LMR_HISTORY_DIVISOR).max(0);
-        let history_bonus = u32::try_from(history_bonus).expect("history bonus is not negative");
-        reduction::base_reduction(depth, move_number)
-            .saturating_sub(pv_bonus + history_bonus)
+        reduction::reduction(late_move, depth, move_number)
+            .saturating_sub(pv_bonus)
             .min(depth - 2)
     }
 

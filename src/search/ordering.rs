@@ -153,10 +153,13 @@ impl<'board> MovePicker<'board> {
         Some(mv) == self.tt_move || self.killers.contains(&Some(mv))
     }
 
-    /// Reports whether the picker has reached the quiet moves after the killers, so that
-    /// the move it last handed out is quiet and neither the TT move nor a killer.
-    pub(super) fn is_handing_out_late_quiets(&self) -> bool {
-        self.stage == Stage::Quiet
+    /// Reports whether the move the picker last handed out is a late move: a noisy move,
+    /// good or bad, or a quiet move, that is neither the TT move nor a killer.
+    pub(super) fn is_handing_out_late_moves(&self) -> bool {
+        matches!(
+            self.stage,
+            Stage::GoodNoisy | Stage::Quiet | Stage::BadNoisy
+        )
     }
 
     /// Stops handing out quiet moves, killers included, so that only the noisy moves not
@@ -499,6 +502,43 @@ mod tests {
             Some("d1d5"),
             "full order {order:?}"
         );
+    }
+
+    #[test]
+    fn late_moves_are_every_move_but_the_tt_move_and_the_killers() {
+        // Nxd5 cxd5 breaks even, but Qxd5 cxd5 loses the queen for a knight.
+        let board =
+            Board::from_fen("4k3/8/2p5/3n4/8/4N3/8/3QK3 w - - 0 1").expect("test FEN is valid");
+        let tt_move = board_move(&board, "e3c4");
+        let killer = board_move(&board, "e1f1");
+        let history = History::new();
+        let mut picker = MovePicker::new(&board, Some(tt_move), [Some(killer), None]);
+        let mut handed_out = Vec::new();
+        while let Some(mv) = picker.next_move(&history) {
+            handed_out.push((mv.to_string(), picker.is_handing_out_late_moves()));
+        }
+        let early = ["e3c4", "e1f1"];
+        assert_eq!(
+            handed_out[..3],
+            [
+                ("e3c4".to_owned(), false),
+                ("e3d5".to_owned(), true),
+                ("e1f1".to_owned(), false)
+            ],
+            "full order {handed_out:?}"
+        );
+        assert_eq!(
+            handed_out.last(),
+            Some(&("d1d5".to_owned(), true)),
+            "full order {handed_out:?}"
+        );
+        for (mv, late) in &handed_out {
+            assert_eq!(
+                *late,
+                !early.contains(&mv.as_str()),
+                "{mv} in {handed_out:?}"
+            );
+        }
     }
 
     #[test]
