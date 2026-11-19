@@ -2,7 +2,7 @@
 //! search, and history, kept from one search to the next.
 
 use super::MAX_PLY;
-use crate::chess::{Colour, Move};
+use crate::chess::{Board, Colour, Move, PieceType};
 
 /// The largest magnitude a history value reaches. The gravity formula in
 /// [`apply_gravity`] keeps every value within it. Raising it relative to the bonuses
@@ -23,9 +23,9 @@ const BONUS_OFFSET: i32 = 250;
 /// table.
 const MAX_BONUS: i32 = 1_500;
 
-/// The bonus earned by a quiet move causing a beta cutoff at `depth`, and the malus taken
-/// by each quiet move tried before it. Common values among open-source engines at a
-/// similar stage.
+/// The bonus earned by a move causing a beta cutoff at `depth`, and the malus taken by
+/// each move tried before it, in both quiet and noisy history. Common values among
+/// open-source engines at a similar stage.
 fn bonus(depth: u32) -> i32 {
     let depth = i32::try_from(depth).unwrap_or(i32::MAX);
     BONUS_PER_PLY
@@ -49,6 +49,7 @@ fn apply_gravity(entry: &mut i16, delta: i32) {
 #[derive(Clone, Debug)]
 pub(super) struct History {
     quiet: QuietHistory,
+    noisy: NoisyHistory,
 }
 
 impl History {
@@ -56,6 +57,7 @@ impl History {
     pub(super) fn new() -> Self {
         Self {
             quiet: QuietHistory::new(),
+            noisy: NoisyHistory::new(),
         }
     }
 
@@ -64,25 +66,36 @@ impl History {
         &self.quiet
     }
 
-    /// Records that `mv`, played by `colour`, caused a beta cutoff `depth` plies deep after
-    /// the quiet moves `quiets` and the noisy moves `_noisies` were tried before it and
-    /// failed to. A quiet move earns a [`bonus`] in quiet history, and each move in
-    /// `quiets` takes the matching malus. A noisy move's cutoff changes nothing.
+    /// The noisy history.
+    pub(super) const fn noisy(&self) -> &NoisyHistory {
+        &self.noisy
+    }
+
+    /// Records that `mv` caused a beta cutoff in `board`, `depth` plies deep, after the
+    /// quiet moves `quiets` and the noisy moves `noisies` were tried before it and failed
+    /// to. The cut-off move earns a [`bonus`] in its own table. A quiet cut-off move also
+    /// gives each move in `quiets` the matching malus in quiet history. Either way, each
+    /// move in `noisies` takes the malus in noisy history.
     pub(super) fn update_on_cutoff(
         &mut self,
-        colour: Colour,
+        board: &Board,
         mv: Move,
         quiets: &[Move],
-        _noisies: &[Move],
+        noisies: &[Move],
         depth: u32,
     ) {
-        if mv.is_noisy() {
-            return;
-        }
         let bonus = bonus(depth);
-        self.quiet.update(colour, mv, bonus);
-        for &quiet in quiets {
-            self.quiet.update(colour, quiet, -bonus);
+        if mv.is_noisy() {
+            self.noisy.update(board, mv, bonus);
+        } else {
+            let colour = board.side_to_move();
+            self.quiet.update(colour, mv, bonus);
+            for &quiet in quiets {
+                self.quiet.update(colour, quiet, -bonus);
+            }
+        }
+        for &noisy in noisies {
+            self.noisy.update(board, noisy, -bonus);
         }
     }
 }
@@ -115,6 +128,55 @@ impl QuietHistory {
             delta,
         );
     }
+}
+
+/// Noisy history: how often each noisy move, by colour, moved piece type, destination
+/// and victim type, has caused a beta cutoff, weighted by depth.
+#[derive(Clone, Debug)]
+pub(super) struct NoisyHistory {
+    table: Box<[[[[i16; 6]; 64]; 6]; 2]>,
+}
+
+impl NoisyHistory {
+    /// Returns a table with every value zero.
+    pub(super) fn new() -> Self {
+        Self {
+            table: Box::new([[[[0; 6]; 64]; 6]; 2]),
+        }
+    }
+
+    /// The noisy history value of the noisy move `mv` in `board`.
+    pub(super) fn get(&self, board: &Board, mv: Move) -> i32 {
+        let [colour, piece, to, victim] = Self::index(board, mv);
+        i32::from(self.table[colour][piece][to][victim])
+    }
+
+    /// Adds `delta`, a bonus if positive and a malus if negative, to the value of the noisy
+    /// move `mv` in `board`, as [`apply_gravity`] describes.
+    pub(super) fn update(&mut self, board: &Board, mv: Move, delta: i32) {
+        let [colour, piece, to, victim] = Self::index(board, mv);
+        apply_gravity(&mut self.table[colour][piece][to][victim], delta);
+    }
+
+    /// The table indices of `mv` in `board`, in table order: colour, moved piece type,
+    /// destination and victim slot.
+    fn index(board: &Board, mv: Move) -> [usize; 4] {
+        let piece = board
+            .piece_at(mv.from())
+            .expect("a move's origin holds a piece");
+        [
+            piece.colour().index(),
+            piece.piece_type().index(),
+            mv.to().index(),
+            victim_slot(board, mv).index(),
+        ]
+    }
+}
+
+/// The victim slot of noisy history that `mv` uses in `board`: what it captures, or the
+/// pawn slot for a promotion that captures nothing, which no real capture uses.
+fn victim_slot(board: &Board, mv: Move) -> PieceType {
+    board.captured(mv).unwrap_or(PieceType::Pawn)
 }
 
 /// Two quiet moves per ply that recently caused a beta cutoff there, most recent first.
@@ -205,7 +267,7 @@ mod tests {
         let board = Board::startpos();
         let quiets = board.quiet_moves();
         let mut history = History::new();
-        history.update_on_cutoff(Colour::White, quiets[2], &[], &[], 4);
+        history.update_on_cutoff(&board, quiets[2], &[], &[], 4);
         assert_eq!(history.quiet().get(Colour::White, quiets[2]), 950);
         assert_eq!(history.quiet().get(Colour::Black, quiets[2]), 0);
     }
@@ -216,7 +278,7 @@ mod tests {
         let quiets = board.quiet_moves();
         let noisy = *board.noisy_moves().first().expect("exd5 is a capture");
         let mut history = History::new();
-        history.update_on_cutoff(Colour::White, quiets[2], &quiets[..2], &[noisy], 4);
+        history.update_on_cutoff(&board, quiets[2], &quiets[..2], &[noisy], 4);
         assert_eq!(history.quiet().get(Colour::White, quiets[0]), -950);
         assert_eq!(history.quiet().get(Colour::White, quiets[1]), -950);
         assert_eq!(
@@ -232,11 +294,68 @@ mod tests {
         let capture = *board.noisy_moves().first().expect("exd5 is a capture");
         let quiets = board.quiet_moves();
         let mut history = History::new();
-        history.update_on_cutoff(Colour::White, capture, &quiets[..2], &[], 4);
+        history.update_on_cutoff(&board, capture, &quiets[..2], &[], 4);
         for &quiet in &quiets[..2] {
             assert_eq!(history.quiet().get(Colour::White, quiet), 0, "{quiet}");
         }
         assert_eq!(history.quiet().get(Colour::White, capture), 0);
+    }
+
+    #[test]
+    fn noisy_moves_tried_before_a_quiet_cutoff_get_the_malus() {
+        let board = capture_position();
+        let quiets = board.quiet_moves();
+        let noisy = *board.noisy_moves().first().expect("exd5 is a capture");
+        let mut history = History::new();
+        history.update_on_cutoff(&board, quiets[2], &quiets[..2], &[noisy], 4);
+        assert_eq!(history.noisy().get(&board, noisy), -950);
+    }
+
+    #[test]
+    fn a_noisy_cutoff_gives_the_bonus_to_it_and_the_malus_to_earlier_noisy_moves() {
+        // White can take the rook with the queen or the pawn, or the knight with the
+        // pawn.
+        let board: Board = "4k3/8/8/2r1n3/3P4/8/8/2Q1K3 w - - 0 1"
+            .parse()
+            .expect("valid FEN");
+        let noisies = board.noisy_moves();
+        assert_eq!(noisies.len(), 3, "{noisies:?}");
+        let mut history = History::new();
+        history.update_on_cutoff(&board, noisies[2], &[], &noisies[..1], 4);
+        assert_eq!(history.noisy().get(&board, noisies[2]), 950);
+        assert_eq!(history.noisy().get(&board, noisies[0]), -950);
+        assert_eq!(history.noisy().get(&board, noisies[1]), 0, "not tried");
+    }
+
+    #[test]
+    fn en_passant_uses_the_pawn_victim_slot() {
+        let board: Board = "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1"
+            .parse()
+            .expect("valid FEN");
+        let en_passant = *board
+            .noisy_moves()
+            .iter()
+            .find(|mv| mv.is_en_passant())
+            .expect("exd6 en passant is legal");
+        assert_eq!(victim_slot(&board, en_passant), PieceType::Pawn);
+    }
+
+    #[test]
+    fn a_promotion_that_captures_nothing_uses_the_pawn_victim_slot() {
+        let board: Board = "1n2k3/P7/8/8/8/8/8/4K3 w - - 0 1"
+            .parse()
+            .expect("valid FEN");
+        let noisies = board.noisy_moves();
+        let push = noisies
+            .iter()
+            .find(|mv| !mv.is_capture())
+            .expect("a8 promotions capture nothing");
+        let capture = noisies
+            .iter()
+            .find(|mv| mv.is_capture())
+            .expect("axb8 promotions capture the knight");
+        assert_eq!(victim_slot(&board, *push), PieceType::Pawn);
+        assert_eq!(victim_slot(&board, *capture), PieceType::Knight);
     }
 
     #[test]

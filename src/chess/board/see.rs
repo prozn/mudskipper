@@ -39,12 +39,7 @@ impl Board {
             return threshold <= 0;
         }
         let (from, to) = (mv.from(), mv.to());
-        let mut gain = if mv.is_en_passant() {
-            value(PieceType::Pawn)
-        } else {
-            self.piece_at(to)
-                .map_or(0, |piece| value(piece.piece_type()))
-        };
+        let mut gain = self.captured(mv).map_or(0, value);
         // The piece left standing on the target square, open to recapture.
         let mut exposed = self
             .piece_at(from)
