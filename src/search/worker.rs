@@ -565,9 +565,9 @@ impl Worker {
     /// position is quiet, and returns its score within `window`.
     ///
     /// The side to move may stand pat on the static evaluation instead of capturing, and
-    /// noisy moves that lose material by static exchange evaluation are skipped, the TT
-    /// move included. In check it may not stand pat, and every evasion is searched so that
-    /// mates are seen.
+    /// bad noisy moves, which lose more material by static exchange evaluation than their
+    /// ordering score allows, are skipped, the TT move included. In check it may not stand
+    /// pat, and every evasion is searched so that mates are seen.
     ///
     /// Stalemate is not detected when the side to move is not in check: it stands pat on
     /// the static evaluation even with no legal move. Detecting it would need a full

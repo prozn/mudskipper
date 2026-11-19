@@ -1,9 +1,10 @@
 //! Move ordering by a staged move picker (ADR-0003), which generates each group of moves
 //! only when the search reaches it: the transposition table's move, never generated; then
-//! the good noisy moves, which static exchange evaluation finds do not lose material, by
-//! the victim's value plus noisy history; then the killer moves; then the other
-//! quiet moves by quiet history; then the bad noisy moves, which lose material, in the
-//! same order as the good ones. A cutoff in an early stage skips generating the later ones.
+//! the good noisy moves, which static exchange evaluation finds lose no more material than
+//! their ordering score allows, by the victim's value plus noisy history; then the killer
+//! moves; then the other quiet moves by quiet history; then the bad noisy moves, which lose
+//! more, in the same order as the good ones. A cutoff in an early stage skips generating
+//! the later ones.
 
 use super::history::History;
 use crate::chess::{Board, Move, MoveList};
@@ -23,6 +24,13 @@ const VICTIM_WEIGHT: i32 = 16;
 /// promotion that captures nothing comes below a pawn capture at equal history.
 const PROMOTION_DIVISOR: i32 = 10;
 
+/// What a noisy move's ordering score is divided by to give how much material it may lose
+/// by static exchange evaluation and still count as good. At 32 a capture may lose about
+/// half its victim's value plus noisy history / 32, which is about 5 pawns at full
+/// history. Lowering it lets history pull more losing captures in with the good ones; a
+/// negative score raises the bar above zero instead.
+const GOOD_NOISY_DIVISOR: i32 = 32;
+
 /// Which moves a picker hands out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Coverage {
@@ -30,8 +38,8 @@ enum Coverage {
     All,
     /// Only captures and promotions.
     Noisy,
-    /// Only captures and promotions that do not lose material by static exchange
-    /// evaluation.
+    /// Only good captures and promotions: those that lose no more material by static
+    /// exchange evaluation than their ordering score allows.
     GoodNoisy,
 }
 
@@ -71,7 +79,7 @@ pub(super) struct MovePicker<'board> {
     scores: [i32; MoveList::CAPACITY],
     /// How many of the current stage's moves have been handed out or skipped.
     next: usize,
-    /// The noisy moves found to lose material during the good noisy stage, best first.
+    /// The noisy moves found to be bad during the good noisy stage, best first.
     bad_noisy: MoveList,
     /// How many of `bad_noisy` have been handed out.
     next_bad: usize,
@@ -98,14 +106,13 @@ impl<'board> MovePicker<'board> {
         picker
     }
 
-    /// Returns a picker of the pseudo-legal captures and promotions of `board` that do not
-    /// lose material by static exchange evaluation, with `tt_move` first if it is one of
-    /// them.
+    /// Returns a picker of the pseudo-legal captures and promotions of `board` that lose no
+    /// more material by static exchange evaluation than their ordering score allows, with
+    /// `tt_move` first if it is one of them.
     ///
     /// `tt_move` must be pseudo-legal in `board`, as checked by
     /// [`Board::is_pseudo_legal`].
     pub(super) fn good_noisy(board: &'board Board, tt_move: Option<Move>) -> Self {
-        let tt_move = tt_move.filter(|&mv| mv.is_noisy() && board.see_ge(mv, 0));
         Self::with_coverage(board, tt_move, Coverage::GoodNoisy)
     }
 
@@ -129,10 +136,10 @@ impl<'board> MovePicker<'board> {
         }
     }
 
-    /// Hands out the best-scored move of the current stage not yet handed out, or `None`
-    /// once they are all gone. The first of equally scored moves wins, keeping the order
-    /// deterministic.
-    fn pick_best(&mut self) -> Option<Move> {
+    /// Hands out the best-scored move of the current stage not yet handed out, with its
+    /// score, or `None` once they are all gone. The first of equally scored moves wins,
+    /// keeping the order deterministic.
+    fn pick_best(&mut self) -> Option<(Move, i32)> {
         if self.next == self.moves.len() {
             return None;
         }
@@ -144,8 +151,9 @@ impl<'board> MovePicker<'board> {
         }
         self.moves.swap(self.next, best);
         self.scores.swap(self.next, best);
+        let picked = (self.moves[self.next], self.scores[self.next]);
         self.next += 1;
-        Some(self.moves[self.next - 1])
+        Some(picked)
     }
 
     /// Reports whether `mv` was handed out by an earlier stage than the quiet one.
@@ -181,6 +189,12 @@ impl<'board> MovePicker<'board> {
             match self.stage {
                 Stage::TtMove => {
                     self.stage = Stage::GenerateNoisy;
+                    if self.coverage == Coverage::GoodNoisy {
+                        let board = self.board;
+                        self.tt_move = self
+                            .tt_move
+                            .filter(|&mv| mv.is_noisy() && is_good_noisy(board, mv, history));
+                    }
                     if self.tt_move.is_some() {
                         return self.tt_move;
                     }
@@ -194,9 +208,11 @@ impl<'board> MovePicker<'board> {
                     self.stage = Stage::GoodNoisy;
                 }
                 Stage::GoodNoisy => match self.pick_best() {
-                    Some(mv) if Some(mv) == self.tt_move => {}
-                    Some(mv) if !self.board.see_ge(mv, 0) => self.bad_noisy.push(mv),
-                    Some(mv) => return Some(mv),
+                    Some((mv, _)) if Some(mv) == self.tt_move => {}
+                    Some((mv, score)) if !good_by_score(self.board, mv, score) => {
+                        self.bad_noisy.push(mv);
+                    }
+                    Some((mv, _)) => return Some(mv),
                     None => {
                         self.stage = match self.coverage {
                             Coverage::All => Stage::FirstKiller,
@@ -227,8 +243,8 @@ impl<'board> MovePicker<'board> {
                     self.stage = Stage::Quiet;
                 }
                 Stage::Quiet => match self.pick_best() {
-                    Some(mv) if self.handed_out_early(mv) => {}
-                    Some(mv) => return Some(mv),
+                    Some((mv, _)) if self.handed_out_early(mv) => {}
+                    Some((mv, _)) => return Some(mv),
                     None => self.stage = Stage::BadNoisy,
                 },
                 Stage::BadNoisy => {
@@ -242,6 +258,19 @@ impl<'board> MovePicker<'board> {
             }
         }
     }
+}
+
+/// Reports whether the noisy move `mv` in `board` is good: whether it loses no more
+/// material by static exchange evaluation than its ordering score by `history` allows.
+fn is_good_noisy(board: &Board, mv: Move, history: &History) -> bool {
+    good_by_score(board, mv, score(board, mv, history))
+}
+
+/// Reports whether the noisy move `mv` in `board`, with ordering score `score`, is good:
+/// whether static exchange evaluation finds it wins at least −`score` /
+/// [`GOOD_NOISY_DIVISOR`].
+fn good_by_score(board: &Board, mv: Move, score: i32) -> bool {
+    board.see_ge(mv, -score / GOOD_NOISY_DIVISOR)
 }
 
 /// The ordering score of the noisy move `mv` in `board`: higher is searched first. The
@@ -337,7 +366,7 @@ mod tests {
 
         let good_noisy = drain(MovePicker::good_noisy(board, tt_move), history);
         let mut expected = board.noisy_moves();
-        expected.retain(|mv| board.see_ge(mv, 0));
+        expected.retain(|mv| is_good_noisy(board, mv, history));
         prop_assert_eq!(
             sorted(good_noisy.iter().copied()),
             sorted(expected.iter().copied()),
@@ -499,6 +528,48 @@ mod tests {
             Some("d1d5"),
             "full order {order:?}"
         );
+    }
+
+    #[test]
+    fn a_slightly_losing_capture_with_strong_noisy_history_comes_with_the_good_noisy_moves() {
+        // Nxd5 cxd5 loses a knight for a pawn.
+        let board =
+            Board::from_fen("4k3/8/2p5/3p4/8/4N3/8/4K3 w - - 0 1").expect("test FEN is valid");
+        let capture = board_move(&board, "e3d5");
+        let mut history = History::new();
+        for _ in 0..10 {
+            history.update_on_cutoff(&board, capture, &[], &[], 6);
+        }
+        let order = drain(MovePicker::new(&board, None, [None; 2]), &History::new());
+        assert_eq!(
+            order.last(),
+            Some(&capture),
+            "zero history, order {order:?}"
+        );
+        let order = drain(MovePicker::new(&board, None, [None; 2]), &history);
+        assert_eq!(
+            order.first(),
+            Some(&capture),
+            "strong history, order {order:?}"
+        );
+    }
+
+    #[test]
+    fn a_good_noisy_picker_takes_a_slightly_losing_capture_with_strong_noisy_history() {
+        // Nxd5 cxd5 loses a knight for a pawn.
+        let board =
+            Board::from_fen("4k3/8/2p5/3p4/8/4N3/8/4K3 w - - 0 1").expect("test FEN is valid");
+        let capture = board_move(&board, "e3d5");
+        let mut history = History::new();
+        for _ in 0..10 {
+            history.update_on_cutoff(&board, capture, &[], &[], 6);
+        }
+        for tt_move in [None, Some(capture)] {
+            let without = drain(MovePicker::good_noisy(&board, tt_move), &History::new());
+            assert_eq!(without, [], "zero history, TT move {tt_move:?}");
+            let with = drain(MovePicker::good_noisy(&board, tt_move), &history);
+            assert_eq!(with, [capture], "strong history, TT move {tt_move:?}");
+        }
     }
 
     #[test]
