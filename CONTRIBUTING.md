@@ -34,7 +34,7 @@ Add a transposition table
 
 Elo   | 48.31 +- 12.40 (95%)
 SPRT  | 8.0+0.08s Threads=1 Hash=16
-LLR   | 2.96 (-2.94, 2.94) [0.00, 3.00]
+LLR   | 2.96 (-2.94, 2.94) [0.00, 10.00]
 Games | N: 1846 W: 712 L: 461 D: 673
 
 Bench: 8312407
@@ -98,8 +98,13 @@ Bounds are in normalized Elo, with `alpha=0.05` and `beta=0.05`:
 
 | Kind of change | STC | LTC |
 |---|---|---|
-| Gainer: should gain Elo | `[0.00, 3.00]` | `[0.50, 2.50]` |
-| Non-regression: simplification, or a needed change that must not lose | `[-3.00, 1.00]` | `[-3.00, 1.00]` |
+| Gainer: should gain Elo | `[0.00, 10.00]` | `[0.00, 10.00]` |
+| Non-regression: simplification, or a needed change that must not lose | `[-10.00, 0.00]` | `[-10.00, 0.00]` |
+
+Every pair of bounds is 10 apart, so that a test finishes in about 7,000 games when the
+true difference is at either bound. The number of games grows with the square of
+1 / (elo1 − elo0): bounds 3 apart need about 11 times as many, more than a few cores can
+play. The cost is that a gainer worth only a few normalized Elo usually fails.
 
 ### Openings
 
@@ -119,11 +124,10 @@ fastchess \
   -openings file=DFRC_openings.epd format=epd order=random \
   -games 2 -repeat -rounds 50000 \
   -concurrency 8 \
-  -sprt elo0=0 elo1=3 alpha=0.05 beta=0.05 model=normalized \
+  -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 model=normalized \
   -recover \
   -pgnout file=sprt.pgn
 ```
 
-For LTC, change `tc=8+0.08` to `tc=40+0.4` and the bounds to `elo0=0.5 elo1=2.5`. For
-non-regression, use `elo0=-3 elo1=1`. Set `-concurrency` to the number of physical cores,
+For LTC, change `tc=8+0.08` to `tc=40+0.4`. For non-regression, use `elo0=-10 elo1=0`. Set `-concurrency` to the number of physical cores,
 leaving one free. `-variant fischerandom` turns `UCI_Chess960` on in both engines.
