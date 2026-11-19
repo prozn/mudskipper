@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use super::MAX_PLY;
-use super::history::{History, Killers, bonus};
+use super::history::{History, Killers};
 use super::ordering::MovePicker;
 use super::reduction;
 use super::score::{self, DRAW, INFINITY, Score};
@@ -145,7 +145,7 @@ pub struct Worker {
     tt: TranspositionTable,
     /// Quiet moves that caused a beta cutoff at each ply, cleared for each search.
     killers: Killers,
-    /// Butterfly history of quiet moves that caused a beta cutoff, kept between searches.
+    /// History, learned from beta cutoffs and kept between searches.
     history: History,
     /// Keys of every position before the current one, from the game and the search.
     keys: KeyHistory,
@@ -313,8 +313,8 @@ impl Worker {
     /// moves are skipped once they look unable to raise alpha or enough moves have been
     /// searched, as [`prunes_quiet`] describes.
     ///
-    /// A quiet move causing a beta cutoff becomes a killer move at this ply and earns a
-    /// history bonus, and the quiet moves tried before it take the matching malus.
+    /// A quiet move causing a beta cutoff becomes a killer move at this ply, and the
+    /// history are updated as [`History::update_on_cutoff`] describes.
     fn negamax(
         &mut self,
         board: &Board,
@@ -361,8 +361,9 @@ impl Worker {
         let mut best_move = None;
         let mut legal_moves = 0;
         let mut quiets_tried = MoveList::new();
+        let mut noisies_tried = MoveList::new();
         let mut picker = MovePicker::new(board, tt_move, self.killers.get(ply));
-        while let Some(mv) = picker.next_move(&self.history) {
+        while let Some(mv) = picker.next_move(self.history.quiet()) {
             if prunes_quiet(mv, node, depth, static_eval, best, window, legal_moves) {
                 picker.skip_quiets();
                 continue;
@@ -393,13 +394,15 @@ impl Worker {
                     best_move = Some(mv);
                     self.pv.update(ply, mv);
                     if score >= window.beta() {
-                        self.record_cutoff(board, ply, depth, mv, &quiets_tried);
+                        self.record_cutoff(board, ply, mv, &quiets_tried, &noisies_tried, depth);
                         break;
                     }
                     window.raise_alpha(score);
                 }
             }
-            if !mv.is_noisy() {
+            if mv.is_noisy() {
+                noisies_tried.push(mv);
+            } else {
                 quiets_tried.push(mv);
             }
         }
@@ -484,7 +487,7 @@ impl Worker {
         // The side that played mv is the one not to move in child.
         let colour = !child.side_to_move();
         let pv_bonus = u32::from(node == Node::Pv);
-        let history_bonus = (self.history.get(colour, mv) / LMR_HISTORY_DIVISOR).max(0);
+        let history_bonus = (self.history.quiet().get(colour, mv) / LMR_HISTORY_DIVISOR).max(0);
         let history_bonus = u32::try_from(history_bonus).expect("history bonus is not negative");
         reduction::base_reduction(depth, move_number)
             .saturating_sub(pv_bonus + history_bonus)
@@ -625,7 +628,7 @@ impl Worker {
 
         let mut best_move = None;
         let mut legal_moves = 0;
-        while let Some(mv) = moves.next_move(&self.history) {
+        while let Some(mv) = moves.next_move(self.history.quiet()) {
             if !board.is_legal(mv) {
                 continue;
             }
@@ -665,20 +668,23 @@ impl Worker {
         best
     }
 
-    /// Records that `mv` caused a beta cutoff in `board`, `ply` plies from the root and
-    /// `depth` plies deep, after the quiet moves `tried` failed to. Only a quiet move's
-    /// cutoff is recorded.
-    fn record_cutoff(&mut self, board: &Board, ply: usize, depth: u32, mv: Move, tried: &[Move]) {
-        if mv.is_noisy() {
-            return;
+    /// Records that `mv` caused a beta cutoff in `board`, `ply` plies from the root, after
+    /// the quiet moves `quiets` and the noisy moves `noisies` failed to, `depth` plies
+    /// deep. A quiet move that cuts off also becomes a killer move at `ply`.
+    fn record_cutoff(
+        &mut self,
+        board: &Board,
+        ply: usize,
+        mv: Move,
+        quiets: &[Move],
+        noisies: &[Move],
+        depth: u32,
+    ) {
+        if !mv.is_noisy() {
+            self.killers.update(ply, mv);
         }
-        let colour = board.side_to_move();
-        self.killers.update(ply, mv);
-        let bonus = bonus(depth);
-        self.history.update(colour, mv, bonus);
-        for &quiet in tried {
-            self.history.update(colour, quiet, -bonus);
-        }
+        self.history
+            .update_on_cutoff(board.side_to_move(), mv, quiets, noisies, depth);
     }
 
     /// Records the static evaluation of `board`, `ply` plies from the root, on the stack and
