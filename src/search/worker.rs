@@ -119,8 +119,11 @@ const SEE_PRUNING_HISTORY_DIVISOR: i32 = 64;
 pub struct Limits {
     /// The deepest iteration to complete.
     pub depth: Option<u32>,
-    /// The number of nodes after which to stop, even in the middle of an iteration.
+    /// The hard node limit: the number of nodes after which to stop, even in the middle
+    /// of an iteration.
     pub nodes: Option<u64>,
+    /// The soft node limit: the number of nodes after which to start no new iteration.
+    pub soft_nodes: Option<u64>,
     /// How long the search may run.
     pub time: Option<TimeLimit>,
 }
@@ -204,7 +207,8 @@ impl Worker {
     ///
     /// The search deepens one ply at a time and calls `report` after each completed
     /// iteration, and once more if a node limit, the time limit or the stop flag cuts an
-    /// iteration short. A depth limit of 0 is treated as 1, so that there is always a
+    /// iteration short. Once the soft node limit or the soft time limit is passed, no new
+    /// iteration starts. A depth limit of 0 is treated as 1, so that there is always a
     /// searched move to report. For the same reason the time limit and the stop flag are
     /// ignored until the first iteration completes.
     ///
@@ -237,7 +241,7 @@ impl Worker {
         let mut completed: Option<Iteration> = None;
         let mut previous_score = None;
         for depth in 1..=max_depth {
-            if self.interruptible && (self.stop.is_raised() || self.soft_time_is_up()) {
+            if self.interruptible && (self.stop.is_raised() || self.soft_limit_is_reached()) {
                 break;
             }
             let score = self.search_root(board, depth, previous_score);
@@ -730,11 +734,16 @@ impl Worker {
         self.stopped
     }
 
-    /// Reports whether the time limit says to start no new iteration.
-    fn soft_time_is_up(&self) -> bool {
+    /// Reports whether the soft node limit or the soft time limit says to start no new
+    /// iteration.
+    fn soft_limit_is_reached(&self) -> bool {
         self.limits
-            .time
-            .is_some_and(|time| self.start.elapsed() >= time.soft)
+            .soft_nodes
+            .is_some_and(|limit| self.nodes >= limit)
+            || self
+                .limits
+                .time
+                .is_some_and(|time| self.start.elapsed() >= time.soft)
     }
 
     /// Reports whether the time limit says to stop at once.
@@ -1032,6 +1041,32 @@ impl PvTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn soft_node_limit_finishes_the_crossing_iteration_and_starts_no_other() {
+        const SOFT_NODES: u64 = 2_000;
+        const MAX_DEPTH: u32 = 12;
+        let limits = Limits {
+            depth: Some(MAX_DEPTH),
+            soft_nodes: Some(SOFT_NODES),
+            ..Limits::default()
+        };
+        let mut worker = Worker::new(StopFlag::new(), TranspositionTable::new(1));
+        let mut reports = Vec::new();
+        worker.search(&Game::new(Board::startpos()), limits, |report| {
+            reports.push((report.depth, report.nodes));
+        });
+
+        let depths: Vec<u32> = reports.iter().map(|&(depth, _)| depth).collect();
+        let want: Vec<u32> = (1..=depths.len() as u32).collect();
+        assert_eq!(depths, want, "one report per completed iteration");
+        assert!(depths.len() < MAX_DEPTH as usize, "reports {reports:?}");
+        let [.., (_, before), (_, last)] = reports[..] else {
+            panic!("the limit should be crossed after the first iteration: {reports:?}");
+        };
+        assert!(before < SOFT_NODES, "reports {reports:?}");
+        assert!(last >= SOFT_NODES, "reports {reports:?}");
+    }
 
     #[test]
     fn see_pruning_threshold_falls_with_depth_and_good_noisy_history() {
