@@ -25,11 +25,17 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Clippy (datagen)
+        run: cargo clippy --all-targets --locked --features datagen -- -D warnings
+      # Runs every test, including datagen's.
       - name: Test
-        run: cargo test --locked
+        run: cargo test --locked --features datagen
       - name: Docs
         if: runner.os == 'Linux'
-        run: cargo doc --no-deps --locked
+        run: cargo doc --no-deps --locked --features datagen
+      # The normal release build, without datagen, is built by the bench job.
+      - name: Build (datagen)
+        run: cargo build --release --locked --features datagen
       - name: Makefile build
         shell: bash
         run: |
