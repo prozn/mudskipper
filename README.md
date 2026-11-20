@@ -83,6 +83,24 @@ The equivalent without `make` is:
 cargo rustc --release --bin mudskipper -- -C target-cpu=native --emit link=mudskipper-dev
 ```
 
+## Datagen
+
+The `datagen` command plays the engine against itself and writes the games as
+**Training data** in viriformat, for training a **Network**. It sits behind the
+`datagen` Cargo feature, so a normal build doesn't include it. Build it tuned for the
+machine that will run it:
+
+```sh
+make EXE=mudskipper-datagen CPU=native FEATURES=datagen
+./mudskipper-datagen datagen <threads> <games-or-0> <out-dir>
+```
+
+Each thread appends its games to `<out-dir>/<thread>.vf`, so a rerun into the same
+directory keeps the earlier data. A game count of `0` runs until a line reading `stop`
+arrives on standard input; `stop` also ends a run with a game count early, once each
+thread finishes its current game. Progress (games, positions and positions per second)
+prints every ten seconds.
+
 ## Development
 
 ```sh
