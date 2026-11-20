@@ -1,19 +1,27 @@
 //! Move ordering by a staged move picker (ADR-0003), which generates each group of moves
 //! only when the search reaches it: the transposition table's move, never generated; then
 //! the good noisy moves, which static exchange evaluation finds do not lose material, by
-//! most valuable victim, least valuable attacker; then the killer moves; then the other
+//! the victim's value plus noisy history; then the killer moves; then the other
 //! quiet moves by quiet history; then the bad noisy moves, which lose material, in the
 //! same order as the good ones. A cutoff in an early stage skips generating the later ones.
 
-use super::history::QuietHistory;
-use crate::chess::{Board, Move, MoveList, PieceType};
+use super::history::History;
+use crate::chess::{Board, Move, MoveList};
 
 /// Rough piece values for ordering captures, indexed by [`PieceType::index`].
 const ORDER_VALUES: [i32; 6] = [100, 300, 300, 500, 900, 0];
 
-/// How much more the victim's value counts than the attacker's, so that any capture of a
-/// more valuable piece comes before every capture of a less valuable one.
-const VICTIM_WEIGHT: i32 = 10;
+/// What the victim's value is multiplied by in a noisy move's ordering score, setting how
+/// much noisy history it takes to put a capture above one of a more valuable victim.
+/// Raising it makes the victim count for more against history. With pawn = 100 and
+/// history bounded by 16384 it matches Obsidian's scale, where a full history is worth
+/// about 10 pawns of victim value (`docs/research/capture-history.md`).
+const VICTIM_WEIGHT: i32 = 16;
+
+/// What a promotion's weighted value is divided by in its ordering score. It keeps
+/// promotions in the proportion to captures they had under MVV-LVA, so that a queen
+/// promotion that captures nothing comes below a pawn capture at equal history.
+const PROMOTION_DIVISOR: i32 = 10;
 
 /// Which moves a picker hands out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,9 +54,9 @@ enum Stage {
 /// Pseudo-legal moves handed out best first, each once, generating and ordering each
 /// stage's moves only when it is reached.
 ///
-/// It is not an [`Iterator`] because ordering quiet moves reads the worker's
-/// [`QuietHistory`], which the search updates between moves: [`MovePicker::next_move`]
-/// borrows it afresh for each move.
+/// It is not an [`Iterator`] because ordering moves reads the worker's [`History`], which
+/// the search updates between moves: [`MovePicker::next_move`] borrows it afresh for each
+/// move.
 pub(super) struct MovePicker<'board> {
     board: &'board Board,
     tt_move: Option<Move>,
@@ -166,8 +174,9 @@ impl<'board> MovePicker<'board> {
     }
 
     /// Hands out the next move, best first, or `None` once every move has been handed
-    /// out. Quiet moves are ordered by `history` as it stands when they are generated.
-    pub(super) fn next_move(&mut self, history: &QuietHistory) -> Option<Move> {
+    /// out. Each stage's moves are ordered by `history` as it stands when they are
+    /// generated.
+    pub(super) fn next_move(&mut self, history: &History) -> Option<Move> {
         loop {
             match self.stage {
                 Stage::TtMove => {
@@ -179,7 +188,7 @@ impl<'board> MovePicker<'board> {
                 Stage::GenerateNoisy => {
                     self.moves = self.board.noisy_moves();
                     for (i, &mv) in self.moves.iter().enumerate() {
-                        self.scores[i] = score(self.board, mv);
+                        self.scores[i] = score(self.board, mv, history);
                     }
                     self.next = 0;
                     self.stage = Stage::GoodNoisy;
@@ -212,7 +221,7 @@ impl<'board> MovePicker<'board> {
                     self.moves = self.board.quiet_moves();
                     let colour = self.board.side_to_move();
                     for (i, &mv) in self.moves.iter().enumerate() {
-                        self.scores[i] = history.get(colour, mv);
+                        self.scores[i] = history.quiet().get(colour, mv);
                     }
                     self.next = 0;
                     self.stage = Stage::Quiet;
@@ -235,28 +244,18 @@ impl<'board> MovePicker<'board> {
     }
 }
 
-/// The ordering score of `mv` in `board`: higher is searched first.
-fn score(board: &Board, mv: Move) -> i32 {
-    let mut score = 0;
-    if mv.is_capture() {
-        let victim = if mv.is_en_passant() {
-            PieceType::Pawn
-        } else {
-            board
-                .piece_at(mv.to())
-                .expect("a capture's target holds a piece")
-                .piece_type()
-        };
-        let attacker = board
-            .piece_at(mv.from())
-            .expect("a move's origin holds a piece")
-            .piece_type();
-        score += VICTIM_WEIGHT * ORDER_VALUES[victim.index()] - ORDER_VALUES[attacker.index()];
-    }
-    if let Some(promotion) = mv.promotion() {
-        score += ORDER_VALUES[promotion.index()];
-    }
-    score
+/// The ordering score of the noisy move `mv` in `board`: higher is searched first. The
+/// victim's value comes first, and noisy history orders captures of the same victim.
+fn score(board: &Board, mv: Move, history: &History) -> i32 {
+    let victim = board
+        .captured(mv)
+        .map_or(0, |victim| ORDER_VALUES[victim.index()]);
+    let promotion = mv
+        .promotion()
+        .map_or(0, |promotion| ORDER_VALUES[promotion.index()]);
+    VICTIM_WEIGHT * victim
+        + VICTIM_WEIGHT * promotion / PROMOTION_DIVISOR
+        + history.noisy().get(board, mv)
 }
 
 #[cfg(test)]
@@ -265,7 +264,6 @@ mod tests {
     use proptest::sample::Index;
 
     use super::*;
-    use crate::chess::Colour;
 
     /// Where random games start: the start position, a busy middlegame, an endgame, a
     /// position with promotions both ways and a Chess960 position.
@@ -288,7 +286,7 @@ mod tests {
     }
 
     /// Every move `picker` hands out, in order.
-    fn drain(mut picker: MovePicker<'_>, history: &QuietHistory) -> Vec<Move> {
+    fn drain(mut picker: MovePicker<'_>, history: &History) -> Vec<Move> {
         std::iter::from_fn(|| picker.next_move(history)).collect()
     }
 
@@ -297,12 +295,12 @@ mod tests {
     /// usable `killers` straight after the noisy moves.
     fn check_pickers(
         board: &Board,
+        history: &History,
         tt_move: Option<Move>,
         killers: [Option<Move>; 2],
     ) -> Result<(), TestCaseError> {
         let fen = board.to_fen();
-        let history = QuietHistory::new();
-        let all = drain(MovePicker::new(board, tt_move, killers), &history);
+        let all = drain(MovePicker::new(board, tt_move, killers), history);
         prop_assert_eq!(
             sorted(all.iter().copied()),
             sorted(board.pseudo_legal_moves().iter().copied()),
@@ -337,7 +335,7 @@ mod tests {
             tt_move
         );
 
-        let good_noisy = drain(MovePicker::good_noisy(board, tt_move), &history);
+        let good_noisy = drain(MovePicker::good_noisy(board, tt_move), history);
         let mut expected = board.noisy_moves();
         expected.retain(|mv| board.see_ge(mv, 0));
         prop_assert_eq!(
@@ -357,23 +355,37 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
         /// Killers are drawn from the moves of the position before, as they would be from a
-        /// sibling node, so they are often noisy, not pseudo-legal or the TT move here.
+        /// sibling node, so they are often noisy, not pseudo-legal or the TT move here. At
+        /// each ply a random move cuts off after every other move, so that quiet and noisy
+        /// history build up and reorder later plies.
         #[test]
         fn pickers_produce_each_generated_move_once_with_or_without_a_tt_move_and_killers(
             start in 0..STARTS.len(),
             choices in prop::collection::vec(
-                (any::<Index>(), any::<Option<Index>>(), any::<[Option<Index>; 2]>()),
+                (
+                    any::<Index>(),
+                    any::<Option<Index>>(),
+                    any::<[Option<Index>; 2]>(),
+                    (any::<Index>(), 1u32..=20),
+                ),
                 1..MAX_PLIES,
             ),
         ) {
             let mut board = Board::from_fen(STARTS[start]).expect("start FEN is valid");
             let mut previous = board.pseudo_legal_moves();
-            for (next, tt_choice, killer_choices) in choices {
+            let mut history = History::new();
+            for (next, tt_choice, killer_choices, (cut_choice, depth)) in choices {
                 let pseudo_legal = board.pseudo_legal_moves();
                 let tt_move = tt_choice.map(|index| *index.get(&pseudo_legal));
                 let killers = killer_choices.map(|choice| choice.map(|index| *index.get(&previous)));
-                check_pickers(&board, tt_move, killers)?;
-                check_pickers(&board, None, [None; 2])?;
+                let cut = *cut_choice.get(&pseudo_legal);
+                let (noisies, quiets): (Vec<Move>, Vec<Move>) = pseudo_legal
+                    .iter()
+                    .filter(|&&mv| mv != cut)
+                    .partition(|mv| mv.is_noisy());
+                history.update_on_cutoff(&board, cut, &quiets, &noisies, depth);
+                check_pickers(&board, &history, tt_move, killers)?;
+                check_pickers(&board, &History::new(), None, [None; 2])?;
                 let legal = board.legal_moves();
                 if legal.is_empty() {
                     break;
@@ -391,9 +403,8 @@ mod tests {
         let killer = board_move(&board, "h1g2");
         let liked = board_move(&board, "d1d3");
         let disliked = board_move(&board, "f3g1");
-        let mut history = QuietHistory::new();
-        history.update(Colour::White, liked, 1_000);
-        history.update(Colour::White, disliked, -1_000);
+        let mut history = History::new();
+        history.update_on_cutoff(&board, liked, &[disliked], &[], 4);
         let order: Vec<String> = drain(
             MovePicker::new(&board, None, [Some(killer), None]),
             &history,
@@ -415,18 +426,58 @@ mod tests {
         // or the bishop.
         let board =
             Board::from_fen("4k3/8/8/2r1q3/3P4/B4N2/P7/3Q3K w - - 0 1").expect("test FEN is valid");
-        let order: Vec<String> = drain(
-            MovePicker::new(&board, None, [None; 2]),
-            &QuietHistory::new(),
-        )
-        .iter()
-        .map(Move::to_string)
-        .collect();
+        let order: Vec<String> = drain(MovePicker::new(&board, None, [None; 2]), &History::new())
+            .iter()
+            .map(Move::to_string)
+            .collect();
         let first_quiet = order
             .iter()
             .position(|mv| !board_move(&board, mv).is_noisy())
             .expect("there are quiet moves");
-        assert_eq!(&order[..first_quiet], ["d4e5", "f3e5", "d4c5", "a3c5"]);
+        let mut queen_captures = order[..2].to_vec();
+        let mut rook_captures = order[2..first_quiet].to_vec();
+        queen_captures.sort_unstable();
+        rook_captures.sort_unstable();
+        assert_eq!(queen_captures, ["d4e5", "f3e5"], "full order {order:?}");
+        assert_eq!(rook_captures, ["a3c5", "d4c5"], "full order {order:?}");
+    }
+
+    #[test]
+    fn captures_of_the_same_victim_come_in_order_of_noisy_history() {
+        // White can take the queen with the pawn or the knight, and the rook with the pawn
+        // or the bishop.
+        let board =
+            Board::from_fen("4k3/8/8/2r1q3/3P4/B4N2/P7/3Q3K w - - 0 1").expect("test FEN is valid");
+        let mut history = History::new();
+        for (liked, disliked) in [("f3e5", "d4e5"), ("a3c5", "d4c5")] {
+            let liked = board_move(&board, liked);
+            let disliked = board_move(&board, disliked);
+            history.update_on_cutoff(&board, liked, &[], &[disliked], 4);
+        }
+        let order: Vec<String> = drain(MovePicker::new(&board, None, [None; 2]), &history)
+            .iter()
+            .map(Move::to_string)
+            .collect();
+        assert_eq!(
+            order[..4],
+            ["f3e5", "d4e5", "a3c5", "d4c5"],
+            "full order {order:?}"
+        );
+    }
+
+    #[test]
+    fn at_zero_history_a_promotion_that_captures_nothing_comes_below_pawn_captures() {
+        // White can promote on b8 or take the pawn on d5 with the pawn or the queen.
+        let board =
+            Board::from_fen("4k3/1P6/8/Q2p4/4P3/8/8/4K3 w - - 0 1").expect("test FEN is valid");
+        let order: Vec<String> = drain(MovePicker::new(&board, None, [None; 2]), &History::new())
+            .iter()
+            .map(Move::to_string)
+            .collect();
+        let mut pawn_captures = order[..2].to_vec();
+        pawn_captures.sort_unstable();
+        assert_eq!(pawn_captures, ["a5d5", "e4d5"], "full order {order:?}");
+        assert_eq!(order[2], "b7b8q", "full order {order:?}");
     }
 
     #[test]
@@ -437,7 +488,7 @@ mod tests {
         let killer = board_move(&board, "e1f1");
         let order: Vec<String> = drain(
             MovePicker::new(&board, None, [Some(killer), None]),
-            &QuietHistory::new(),
+            &History::new(),
         )
         .iter()
         .map(Move::to_string)
@@ -455,7 +506,7 @@ mod tests {
         // Nxd5 cxd5 breaks even, but Qxd5 cxd5 loses the queen for a knight.
         let board =
             Board::from_fen("4k3/8/2p5/3n4/8/4N3/8/3QK3 w - - 0 1").expect("test FEN is valid");
-        let history = QuietHistory::new();
+        let history = History::new();
         for tt_move in [None, Some(board_move(&board, "d1d5"))] {
             let handed_out: Vec<String> = drain(MovePicker::good_noisy(&board, tt_move), &history)
                 .iter()
@@ -470,17 +521,27 @@ mod tests {
         let board =
             Board::from_fen("4k3/8/8/2r1q3/3P4/B4N2/P7/3Q3K w - - 0 1").expect("test FEN is valid");
         let killer = board_move(&board, "h1g2");
-        let history = QuietHistory::new();
+        let history = History::new();
 
         let mut picker = MovePicker::new(&board, None, [Some(killer), None]);
-        let first = picker.next_move(&history).map(|mv| mv.to_string());
-        assert_eq!(first.as_deref(), Some("d4e5"));
+        // Captures of the same victim tie at zero history, so either queen capture may
+        // come first.
+        let first = picker
+            .next_move(&history)
+            .map(|mv| mv.to_string())
+            .expect("the picker hands out a first move");
+        assert!(["d4e5", "f3e5"].contains(&first.as_str()), "first {first}");
         picker.skip_quiets();
         let rest: Vec<String> = drain(picker, &history)
             .iter()
             .map(Move::to_string)
             .collect();
-        assert_eq!(rest, ["f3e5", "d4c5", "a3c5"]);
+        let other_queen_capture = if first == "d4e5" { "f3e5" } else { "d4e5" };
+        assert_eq!(rest.len(), 3, "rest {rest:?}");
+        assert_eq!(rest[0], other_queen_capture, "rest {rest:?}");
+        let mut rook_captures = rest[1..].to_vec();
+        rook_captures.sort_unstable();
+        assert_eq!(rook_captures, ["a3c5", "d4c5"], "rest {rest:?}");
 
         let mut picker = MovePicker::new(&board, None, [Some(killer), None]);
         let handed_out: Vec<String> = std::iter::from_fn(|| picker.next_move(&history))

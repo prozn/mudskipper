@@ -363,7 +363,7 @@ impl Worker {
         let mut quiets_tried = MoveList::new();
         let mut noisies_tried = MoveList::new();
         let mut picker = MovePicker::new(board, tt_move, self.killers.get(ply));
-        while let Some(mv) = picker.next_move(self.history.quiet()) {
+        while let Some(mv) = picker.next_move(&self.history) {
             if prunes_quiet(mv, node, depth, static_eval, best, window, legal_moves) {
                 picker.skip_quiets();
                 continue;
@@ -628,7 +628,7 @@ impl Worker {
 
         let mut best_move = None;
         let mut legal_moves = 0;
-        while let Some(mv) = moves.next_move(self.history.quiet()) {
+        while let Some(mv) = moves.next_move(&self.history) {
             if !board.is_legal(mv) {
                 continue;
             }
@@ -684,7 +684,7 @@ impl Worker {
             self.killers.update(ply, mv);
         }
         self.history
-            .update_on_cutoff(board.side_to_move(), mv, quiets, noisies, depth);
+            .update_on_cutoff(board, mv, quiets, noisies, depth);
     }
 
     /// Records the static evaluation of `board`, `ply` plies from the root, on the stack and
