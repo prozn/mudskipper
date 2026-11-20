@@ -47,6 +47,30 @@ _Avoid_: Position (when the history is meant too)
 A position recurring in a game with the same Zobrist key: same placement, side to move and castling rights, and the same en passant file when a pawn stands beside the pawn that just double-pushed (pins are ignored). Positions before the last capture or pawn move are never compared. `KeyHistory::repetitions` counts earlier occurrences, so a count of 2 is a threefold repetition.
 _Avoid_: Draw by repetition (when only one recurrence is meant)
 
+## Evaluation
+
+**Network**:
+The trained NNUE weights that evaluate a position for the side to move. Published outside this repo and chosen when the engine is built.
+_Avoid_: Net (in prose), NNUE (for the weights themselves), model
+
+**Accumulator**:
+The **Network**'s first-layer sums for one position, one set from each side's perspective, updated as each move is made instead of recomputed.
+
+**Datagen**:
+Producing **Training data** by having the engine play games against itself.
+_Avoid_: Self-play (for the whole process)
+
+**Training data**:
+Positions from **Datagen** games, each paired with the search's score and the game's result, which a **Network** learns from.
+_Avoid_: Dataset (ambiguous), FENs
+
+**Generation**:
+One round of **Datagen** and training that produces a new **Network**. Generation 1 learns from games played with PeSTO; each later generation learns from games played with the previous network.
+_Avoid_: Version (that is the engine's), iteration
+
+**Pilot network**:
+A **Network** trained on a small amount of **Training data** to prove the pipeline works before a full **Generation** is run.
+
 ## Search
 
 **Transposition table**:
