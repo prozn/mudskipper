@@ -85,7 +85,7 @@ The **History** of each **Quiet move**, by colour, origin and destination square
 _Avoid_: Butterfly history (except for its indexing)
 
 **Noisy history**:
-The **History** of each **Noisy move**, by colour, moved piece, destination square and captured piece, that rises when the move causes a beta cutoff and falls when it was tried before any other move did. A promotion that captures nothing counts as capturing a pawn. Noisy moves are ordered by the value of what they capture, and of what they promote to, plus it.
+The **History** of each **Noisy move**, by colour, moved piece, destination square, captured piece and whether the opponent attacks the destination square before the move (the threat), that rises when the move causes a beta cutoff and falls when it was tried before any other move did. A promotion that captures nothing counts as capturing a pawn. Noisy moves are ordered by the value of what they capture, and of what they promote to, plus it.
 _Avoid_: Capture history (the usual name elsewhere, but it leaves out non-capturing promotions), tactical history
 
 **Principal variation search**:

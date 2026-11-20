@@ -178,11 +178,14 @@ impl Board {
     /// Reports whether the side to move is in check.
     #[must_use]
     pub fn in_check(&self) -> bool {
-        self.is_attacked(
-            self.king(self.side_to_move),
-            !self.side_to_move,
-            self.occupied(),
-        )
+        self.is_attacked_by_opponent(self.king(self.side_to_move))
+    }
+
+    /// Reports whether a piece of the side not to move attacks `square`, with the pieces
+    /// where they stand.
+    #[must_use]
+    pub fn is_attacked_by_opponent(&self, square: Square) -> bool {
+        self.is_attacked(square, !self.side_to_move, self.occupied())
     }
 
     /// Squares holding a piece of either colour.

@@ -130,37 +130,48 @@ impl QuietHistory {
     }
 }
 
-/// Noisy history: how often each noisy move, by colour, moved piece type, destination
-/// and victim type, has caused a beta cutoff, weighted by depth.
+/// Noisy history: how often each noisy move, by colour, moved piece type, destination,
+/// victim type and whether the opponent attacks the destination before the move, has
+/// caused a beta cutoff, weighted by depth.
 #[derive(Clone, Debug)]
 pub(super) struct NoisyHistory {
-    table: Box<[[[[i16; 6]; 64]; 6]; 2]>,
+    table: Box<[NoisyColourTable; 2]>,
 }
+
+/// One colour's noisy history values, by moved piece type, destination, victim slot and
+/// threat.
+type NoisyColourTable = [[[[i16; 2]; 6]; 64]; 6];
 
 impl NoisyHistory {
     /// Returns a table with every value zero.
     pub(super) fn new() -> Self {
         Self {
-            table: Box::new([[[[0; 6]; 64]; 6]; 2]),
+            // Built through a Vec so the 18 KiB table is never assembled on the stack first,
+            // which clippy::large_stack_arrays rejects.
+            table: vec![[[[[0; 2]; 6]; 64]; 6]; 2]
+                .into_boxed_slice()
+                .try_into()
+                .expect("the table has one entry per colour"),
         }
     }
 
     /// The noisy history value of the noisy move `mv` in `board`.
     pub(super) fn get(&self, board: &Board, mv: Move) -> i32 {
-        let [colour, piece, to, victim] = Self::index(board, mv);
-        i32::from(self.table[colour][piece][to][victim])
+        let [colour, piece, to, victim, threat] = Self::index(board, mv);
+        i32::from(self.table[colour][piece][to][victim][threat])
     }
 
     /// Adds `delta`, a bonus if positive and a malus if negative, to the value of the noisy
     /// move `mv` in `board`, as [`apply_gravity`] describes.
     pub(super) fn update(&mut self, board: &Board, mv: Move, delta: i32) {
-        let [colour, piece, to, victim] = Self::index(board, mv);
-        apply_gravity(&mut self.table[colour][piece][to][victim], delta);
+        let [colour, piece, to, victim, threat] = Self::index(board, mv);
+        apply_gravity(&mut self.table[colour][piece][to][victim][threat], delta);
     }
 
     /// The table indices of `mv` in `board`, in table order: colour, moved piece type,
-    /// destination and victim slot.
-    fn index(board: &Board, mv: Move) -> [usize; 4] {
+    /// destination, victim slot and threat: 1 if the opponent attacks the destination
+    /// before the move, else 0.
+    fn index(board: &Board, mv: Move) -> [usize; 5] {
         let piece = board
             .piece_at(mv.from())
             .expect("a move's origin holds a piece");
@@ -169,6 +180,7 @@ impl NoisyHistory {
             piece.piece_type().index(),
             mv.to().index(),
             victim_slot(board, mv).index(),
+            usize::from(board.is_attacked_by_opponent(mv.to())),
         ]
     }
 }
@@ -325,6 +337,41 @@ mod tests {
         assert_eq!(history.noisy().get(&board, noisies[2]), 950);
         assert_eq!(history.noisy().get(&board, noisies[0]), -950);
         assert_eq!(history.noisy().get(&board, noisies[1]), 0, "not tried");
+    }
+
+    /// The rook capture Rxd5 in `board`.
+    fn rook_takes_d5(board: &Board) -> Move {
+        *board
+            .noisy_moves()
+            .iter()
+            .find(|mv| mv.from().to_string() == "d1" && mv.to().to_string() == "d5")
+            .expect("Rxd5 is a capture")
+    }
+
+    #[test]
+    fn the_same_capture_onto_an_attacked_and_an_unattacked_square_reads_different_entries() {
+        // The same rook takes the same knight; only Black's pawn on e6 guards it.
+        let guarded: Board = "4k3/8/4p3/3n4/8/8/8/3RK3 w - - 0 1"
+            .parse()
+            .expect("valid FEN");
+        let unguarded: Board = "4k3/8/8/3n4/4p3/8/8/3RK3 w - - 0 1"
+            .parse()
+            .expect("valid FEN");
+        let mut history = NoisyHistory::new();
+        history.update(&guarded, rook_takes_d5(&guarded), 950);
+        assert_eq!(history.get(&guarded, rook_takes_d5(&guarded)), 950);
+        assert_eq!(history.get(&unguarded, rook_takes_d5(&unguarded)), 0);
+    }
+
+    #[test]
+    fn a_cutoff_and_a_read_of_a_capture_onto_an_attacked_square_share_an_entry() {
+        let board: Board = "4k3/8/4p3/3n4/8/8/8/3RK3 w - - 0 1"
+            .parse()
+            .expect("valid FEN");
+        let capture = rook_takes_d5(&board);
+        let mut history = History::new();
+        history.update_on_cutoff(&board, capture, &[], &[], 4);
+        assert_eq!(history.noisy().get(&board, capture), 950);
     }
 
     #[test]
