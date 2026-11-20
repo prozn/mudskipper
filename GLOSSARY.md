@@ -119,3 +119,7 @@ _Avoid_: FP (in prose)
 **Late move pruning**:
 **Pruning** the remaining **Quiet moves** at a shallow node off the principal variation, not in check, once a number of moves that grows with depth has been searched, the best of them with a score that is not a mate. **Killer moves** are pruned too, so it covers more than the **Late moves** that are quiet. **Noisy moves** are still searched.
 _Avoid_: Move count pruning, LMP (in prose)
+
+**SEE pruning**:
+**Pruning** a **Noisy move** at a shallow node off the principal variation, not in check, once a move has been searched with a score that is not a mate, when its **Static exchange evaluation** loses more material than the search allows. The loss allowed grows with depth and with good **Noisy history**. Poor history shrinks it, but never below zero, so a noisy move that does not lose material is never pruned. Unlike **Futility pruning** and **Late move pruning**, it skips only the move itself.
+_Avoid_: SEE-based pruning

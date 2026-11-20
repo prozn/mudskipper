@@ -100,6 +100,20 @@ const LMP_MAX_DEPTH: u32 = 8;
 /// quiet moves.
 const LMP_BASE_MOVES: u32 = 3;
 
+/// Deepest depth at which a noisy move is skipped when it loses too much material by
+/// static exchange evaluation (SEE pruning), the same as [`FP_MAX_DEPTH`].
+const SEE_PRUNING_MAX_DEPTH: u32 = FP_MAX_DEPTH;
+
+/// The material, in centipawns, SEE pruning lets a noisy move lose per ply of depth before
+/// skipping it. Stormphrax, whose threshold has the same shape, uses 111. A larger margin
+/// prunes fewer moves.
+const SEE_PRUNING_DEPTH_MARGIN: i32 = 90;
+
+/// The divisor of noisy history in the SEE pruning threshold, close to Stormphrax's 65: a
+/// noisy move with full history may lose about 2.5 pawns more. A larger divisor weighs
+/// history less.
+const SEE_PRUNING_HISTORY_DIVISOR: i32 = 64;
+
 /// When a search stops. A search with no limits runs to the deepest supported depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
@@ -307,7 +321,8 @@ impl Worker {
     ///
     /// At shallow nodes off the principal variation and out of check, the remaining quiet
     /// moves are skipped once they look unable to raise alpha or enough moves have been
-    /// searched, as [`prunes_quiet`] describes.
+    /// searched, as [`prunes_quiet`] describes, and a noisy move is skipped when it loses
+    /// too much material, as [`prunes_noisy`] describes.
     ///
     /// A quiet move causing a beta cutoff becomes a killer move at this ply, and the
     /// history are updated as [`History::update_on_cutoff`] describes.
@@ -364,7 +379,9 @@ impl Worker {
                 picker.skip_quiets();
                 continue;
             }
-            if !board.is_legal(mv) {
+            if prunes_noisy(board, mv, node, depth, static_eval, best, &self.history)
+                || !board.is_legal(mv)
+            {
                 continue;
             }
             legal_moves += 1;
@@ -792,18 +809,27 @@ fn is_reducible(child: &Board, depth: u32, move_number: u32) -> bool {
     depth >= LMR_MIN_DEPTH && move_number > LMR_FULL_DEPTH_MOVES && !child.in_check()
 }
 
+/// Returns the static evaluation `static_eval` of a node of kind `node` if moves may be
+/// pruned there at all, given the best score `best` so far.
+///
+/// Moves are pruned only off the principal variation and out of check (where `static_eval`
+/// is `None`), and only once a move has been searched with a score that is not a mate, so
+/// that a node never skips every move and is mistaken for checkmate or stalemate, and a
+/// mate found below it is never hidden. Before any move is searched, `best` is
+/// `-INFINITY`, which counts as a mate score.
+fn pruning_eval(node: Node, static_eval: Option<i32>, best: i32) -> Option<i32> {
+    static_eval.filter(|_| node == Node::NonPv && !score::is_mate(best))
+}
+
 /// Reports whether `mv` is a quiet move that, with the quiet moves after it, may be
 /// skipped at a node of kind `node`, `depth` plies deep with static evaluation
 /// `static_eval`, given the best score `best` so far, the node's `window` and the
 /// `legal_moves` already searched.
 ///
-/// Quiet moves are skipped only off the principal variation and out of check (where
-/// `static_eval` is `None`), and only once a move has been searched with a score that is
-/// not a mate, so that a node never skips every move and is mistaken for checkmate or
-/// stalemate, and a mate found below it is never hidden. Before any move is searched,
-/// `best` is `-INFINITY`, which counts as a mate score. Past that, they are skipped when the
-/// static evaluation plus a margin growing with depth cannot reach alpha (futility
-/// pruning), or once enough moves for the depth have been searched (late move pruning).
+/// Quiet moves are skipped only where [`pruning_eval`] allows pruning. There, they are
+/// skipped when the static evaluation plus a margin growing with depth cannot reach alpha
+/// (futility pruning), or once enough moves for the depth have been searched (late move
+/// pruning).
 fn prunes_quiet(
     mv: Move,
     node: Node,
@@ -813,16 +839,50 @@ fn prunes_quiet(
     window: Window,
     legal_moves: u32,
 ) -> bool {
-    let Some(eval) = static_eval else {
-        return false;
-    };
-    if mv.is_noisy() || node == Node::Pv || score::is_mate(best) {
+    if mv.is_noisy() {
         return false;
     }
+    let Some(eval) = pruning_eval(node, static_eval, best) else {
+        return false;
+    };
     let futile = depth <= FP_MAX_DEPTH
         && eval + FP_BASE_MARGIN + FP_DEPTH_MARGIN * depth as i32 <= window.alpha();
     let late = depth <= LMP_MAX_DEPTH && legal_moves >= LMP_BASE_MOVES + depth * depth / 2;
     futile || late
+}
+
+/// Reports whether `mv`, a noisy move on `board`, may be skipped at a node of kind `node`,
+/// `depth` plies deep with static evaluation `static_eval`, given the best score `best` so
+/// far (SEE pruning).
+///
+/// Noisy moves are skipped only where [`pruning_eval`] allows pruning, at most
+/// [`SEE_PRUNING_MAX_DEPTH`] deep, when static exchange evaluation falls below the
+/// [`see_pruning_threshold`] for the depth and the move's noisy history in `history`.
+fn prunes_noisy(
+    board: &Board,
+    mv: Move,
+    node: Node,
+    depth: u32,
+    static_eval: Option<i32>,
+    best: i32,
+    history: &History,
+) -> bool {
+    mv.is_noisy()
+        && depth <= SEE_PRUNING_MAX_DEPTH
+        && pruning_eval(node, static_eval, best).is_some()
+        && !board.see_ge(
+            mv,
+            see_pruning_threshold(depth, history.noisy().get(board, mv)),
+        )
+}
+
+/// The material, in centipawns, below which static exchange evaluation lets SEE pruning
+/// skip a noisy move `depth` plies deep with noisy history `noisy_history`.
+///
+/// The threshold falls with depth and with good history, and never rises above zero, so a
+/// noisy move that does not lose material is never skipped however bad its history.
+fn see_pruning_threshold(depth: u32, noisy_history: i32) -> i32 {
+    (-SEE_PRUNING_DEPTH_MARGIN * depth as i32 - noisy_history / SEE_PRUNING_HISTORY_DIVISOR).min(0)
 }
 
 /// Whether a node lies on the principal variation: the root, the first move searched from
@@ -966,5 +1026,24 @@ impl PvTable {
     /// The principal variation at `ply`.
     fn line(&self, ply: usize) -> &[Move] {
         &self.moves[ply][..self.lengths[ply]]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn see_pruning_threshold_falls_with_depth_and_good_noisy_history() {
+        assert_eq!(see_pruning_threshold(1, 0), -90);
+        assert_eq!(see_pruning_threshold(4, 0), -360);
+        assert_eq!(see_pruning_threshold(2, 6400), -280);
+        assert_eq!(see_pruning_threshold(3, -16384), -14);
+    }
+
+    #[test]
+    fn see_pruning_threshold_never_rises_above_zero() {
+        assert_eq!(see_pruning_threshold(1, -16384), 0);
+        assert_eq!(see_pruning_threshold(2, -16384), 0);
     }
 }
