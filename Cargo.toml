@@ -17,6 +17,14 @@ publish = false
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 # Property tests.
 proptest = { version = "1", default-features = false, features = ["std"] }
+# Decodes datagen output in tests, to check the hand-written writer against the
+# reference implementation. Pinned to the version bullet's utilities read.
+viriformat = "=2.0.1"
+
+[features]
+# The `datagen` command, which writes self-play training data. Off by default, so a
+# normal build never compiles it.
+datagen = []
 
 [[bench]]
 name = "movegen"
