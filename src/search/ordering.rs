@@ -6,7 +6,7 @@
 //! same order as the good ones. A cutoff in an early stage skips generating the later ones.
 
 use super::history::History;
-use crate::chess::{Board, Move, MoveList};
+use crate::chess::{Bitboard, Board, Move, MoveList};
 
 /// Rough piece values for ordering captures, indexed by [`PieceType::index`].
 const ORDER_VALUES: [i32; 6] = [100, 300, 300, 500, 900, 0];
@@ -75,6 +75,8 @@ pub(super) struct MovePicker<'board> {
     bad_noisy: MoveList,
     /// How many of `bad_noisy` have been handed out.
     next_bad: usize,
+    /// What [`Board::threats`] gives for `board`, once something has needed it.
+    threats: Option<Bitboard>,
 }
 
 impl<'board> MovePicker<'board> {
@@ -126,6 +128,7 @@ impl<'board> MovePicker<'board> {
             next: 0,
             bad_noisy: MoveList::new(),
             next_bad: 0,
+            threats: None,
         }
     }
 
@@ -176,6 +179,13 @@ impl<'board> MovePicker<'board> {
         }
     }
 
+    /// The squares the opponent attacks in the picker's board, as [`Board::threats`]
+    /// gives, worked out the first time they are needed at this node and kept for the
+    /// rest of it.
+    pub(super) fn threats(&mut self) -> Bitboard {
+        *self.threats.get_or_insert_with(|| self.board.threats())
+    }
+
     /// Hands out the next move, best first, or `None` once every move has been handed
     /// out. Each stage's moves are ordered by `history` as it stands when they are
     /// generated.
@@ -190,8 +200,11 @@ impl<'board> MovePicker<'board> {
                 }
                 Stage::GenerateNoisy => {
                     self.moves = self.board.noisy_moves();
-                    for (i, &mv) in self.moves.iter().enumerate() {
-                        self.scores[i] = score(self.board, mv, history);
+                    if !self.moves.is_empty() {
+                        let threats = self.threats();
+                        for (i, &mv) in self.moves.iter().enumerate() {
+                            self.scores[i] = score(self.board, threats, mv, history);
+                        }
                     }
                     self.next = 0;
                     self.stage = Stage::GoodNoisy;
@@ -247,9 +260,10 @@ impl<'board> MovePicker<'board> {
     }
 }
 
-/// The ordering score of the noisy move `mv` in `board`: higher is searched first. The
+/// The ordering score of the noisy move `mv` in `board`, whose opponent attacks `threats`:
+/// higher is searched first. The
 /// victim's value comes first, and noisy history orders captures of the same victim.
-fn score(board: &Board, mv: Move, history: &History) -> i32 {
+fn score(board: &Board, threats: Bitboard, mv: Move, history: &History) -> i32 {
     let victim = board
         .captured(mv)
         .map_or(0, |victim| ORDER_VALUES[victim.index()]);
@@ -258,7 +272,7 @@ fn score(board: &Board, mv: Move, history: &History) -> i32 {
         .map_or(0, |promotion| ORDER_VALUES[promotion.index()]);
     VICTIM_WEIGHT * victim
         + VICTIM_WEIGHT * promotion / PROMOTION_DIVISOR
-        + history.noisy().get(board, mv)
+        + history.noisy().get(board, threats, mv)
 }
 
 #[cfg(test)]
@@ -386,7 +400,7 @@ mod tests {
                     .iter()
                     .filter(|&&mv| mv != cut)
                     .partition(|mv| mv.is_noisy());
-                history.update_on_cutoff(&board, cut, &quiets, &noisies, depth);
+                history.update_on_cutoff(&board, board.threats(), cut, &quiets, &noisies, depth);
                 check_pickers(&board, &history, tt_move, killers)?;
                 check_pickers(&board, &History::new(), None, [None; 2])?;
                 let legal = board.legal_moves();
@@ -407,7 +421,7 @@ mod tests {
         let liked = board_move(&board, "d1d3");
         let disliked = board_move(&board, "f3g1");
         let mut history = History::new();
-        history.update_on_cutoff(&board, liked, &[disliked], &[], 4);
+        history.update_on_cutoff(&board, board.threats(), liked, &[disliked], &[], 4);
         let order: Vec<String> = drain(
             MovePicker::new(&board, None, [Some(killer), None]),
             &history,
@@ -455,7 +469,7 @@ mod tests {
         for (liked, disliked) in [("f3e5", "d4e5"), ("a3c5", "d4c5")] {
             let liked = board_move(&board, liked);
             let disliked = board_move(&board, disliked);
-            history.update_on_cutoff(&board, liked, &[], &[disliked], 4);
+            history.update_on_cutoff(&board, board.threats(), liked, &[], &[disliked], 4);
         }
         let order: Vec<String> = drain(MovePicker::new(&board, None, [None; 2]), &history)
             .iter()

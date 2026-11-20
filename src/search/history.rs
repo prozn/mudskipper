@@ -2,7 +2,7 @@
 //! search, and history, kept from one search to the next.
 
 use super::MAX_PLY;
-use crate::chess::{Board, Colour, Move, PieceType};
+use crate::chess::{Bitboard, Board, Colour, Move, PieceType};
 
 /// The largest magnitude a history value reaches. The gravity formula in
 /// [`apply_gravity`] keeps every value within it. Raising it relative to the bonuses
@@ -71,14 +71,15 @@ impl History {
         &self.noisy
     }
 
-    /// Records that `mv` caused a beta cutoff in `board`, `depth` plies deep, after the
-    /// quiet moves `quiets` and the noisy moves `noisies` were tried before it and failed
-    /// to. The cut-off move earns a [`bonus`] in its own table. A quiet cut-off move also
+    /// Records that `mv` caused a beta cutoff in `board`, whose opponent attacks
+    /// `threats` (as [`Board::threats`] gives), `depth` plies deep, after the quiet moves
+    /// `quiets` and the noisy moves `noisies` were tried before it and failed to. The cut-off move earns a [`bonus`] in its own table. A quiet cut-off move also
     /// gives each move in `quiets` the matching malus in quiet history. Either way, each
     /// move in `noisies` takes the malus in noisy history.
     pub(super) fn update_on_cutoff(
         &mut self,
         board: &Board,
+        threats: Bitboard,
         mv: Move,
         quiets: &[Move],
         noisies: &[Move],
@@ -86,7 +87,7 @@ impl History {
     ) {
         let bonus = bonus(depth);
         if mv.is_noisy() {
-            self.noisy.update(board, mv, bonus);
+            self.noisy.update(board, threats, mv, bonus);
         } else {
             let colour = board.side_to_move();
             self.quiet.update(colour, mv, bonus);
@@ -95,7 +96,7 @@ impl History {
             }
         }
         for &noisy in noisies {
-            self.noisy.update(board, noisy, -bonus);
+            self.noisy.update(board, threats, noisy, -bonus);
         }
     }
 }
@@ -155,23 +156,25 @@ impl NoisyHistory {
         }
     }
 
-    /// The noisy history value of the noisy move `mv` in `board`.
-    pub(super) fn get(&self, board: &Board, mv: Move) -> i32 {
-        let [colour, piece, to, victim, threat] = Self::index(board, mv);
+    /// The noisy history value of the noisy move `mv` in `board`, whose opponent attacks
+    /// `threats` (as [`Board::threats`] gives).
+    pub(super) fn get(&self, board: &Board, threats: Bitboard, mv: Move) -> i32 {
+        let [colour, piece, to, victim, threat] = Self::index(board, threats, mv);
         i32::from(self.table[colour][piece][to][victim][threat])
     }
 
     /// Adds `delta`, a bonus if positive and a malus if negative, to the value of the noisy
-    /// move `mv` in `board`, as [`apply_gravity`] describes.
-    pub(super) fn update(&mut self, board: &Board, mv: Move, delta: i32) {
-        let [colour, piece, to, victim, threat] = Self::index(board, mv);
+    /// move `mv` in `board`, whose opponent attacks `threats` (as [`Board::threats`]
+    /// gives), as [`apply_gravity`] describes.
+    pub(super) fn update(&mut self, board: &Board, threats: Bitboard, mv: Move, delta: i32) {
+        let [colour, piece, to, victim, threat] = Self::index(board, threats, mv);
         apply_gravity(&mut self.table[colour][piece][to][victim][threat], delta);
     }
 
-    /// The table indices of `mv` in `board`, in table order: colour, moved piece type,
-    /// destination, victim slot and threat: 1 if the opponent attacks the destination
-    /// before the move, else 0.
-    fn index(board: &Board, mv: Move) -> [usize; 5] {
+    /// The table indices of `mv` in `board`, whose opponent attacks `threats`, in table
+    /// order: colour, moved piece type, destination, victim slot and threat: 1 if the
+    /// destination is in `threats`, else 0.
+    fn index(board: &Board, threats: Bitboard, mv: Move) -> [usize; 5] {
         let piece = board
             .piece_at(mv.from())
             .expect("a move's origin holds a piece");
@@ -180,7 +183,7 @@ impl NoisyHistory {
             piece.piece_type().index(),
             mv.to().index(),
             victim_slot(board, mv).index(),
-            usize::from(board.is_attacked_by_opponent(mv.to())),
+            usize::from(threats.contains(mv.to())),
         ]
     }
 }
@@ -279,7 +282,7 @@ mod tests {
         let board = Board::startpos();
         let quiets = board.quiet_moves();
         let mut history = History::new();
-        history.update_on_cutoff(&board, quiets[2], &[], &[], 4);
+        history.update_on_cutoff(&board, board.threats(), quiets[2], &[], &[], 4);
         assert_eq!(history.quiet().get(Colour::White, quiets[2]), 950);
         assert_eq!(history.quiet().get(Colour::Black, quiets[2]), 0);
     }
@@ -290,7 +293,14 @@ mod tests {
         let quiets = board.quiet_moves();
         let noisy = *board.noisy_moves().first().expect("exd5 is a capture");
         let mut history = History::new();
-        history.update_on_cutoff(&board, quiets[2], &quiets[..2], &[noisy], 4);
+        history.update_on_cutoff(
+            &board,
+            board.threats(),
+            quiets[2],
+            &quiets[..2],
+            &[noisy],
+            4,
+        );
         assert_eq!(history.quiet().get(Colour::White, quiets[0]), -950);
         assert_eq!(history.quiet().get(Colour::White, quiets[1]), -950);
         assert_eq!(
@@ -306,7 +316,7 @@ mod tests {
         let capture = *board.noisy_moves().first().expect("exd5 is a capture");
         let quiets = board.quiet_moves();
         let mut history = History::new();
-        history.update_on_cutoff(&board, capture, &quiets[..2], &[], 4);
+        history.update_on_cutoff(&board, board.threats(), capture, &quiets[..2], &[], 4);
         for &quiet in &quiets[..2] {
             assert_eq!(history.quiet().get(Colour::White, quiet), 0, "{quiet}");
         }
@@ -319,8 +329,15 @@ mod tests {
         let quiets = board.quiet_moves();
         let noisy = *board.noisy_moves().first().expect("exd5 is a capture");
         let mut history = History::new();
-        history.update_on_cutoff(&board, quiets[2], &quiets[..2], &[noisy], 4);
-        assert_eq!(history.noisy().get(&board, noisy), -950);
+        history.update_on_cutoff(
+            &board,
+            board.threats(),
+            quiets[2],
+            &quiets[..2],
+            &[noisy],
+            4,
+        );
+        assert_eq!(history.noisy().get(&board, board.threats(), noisy), -950);
     }
 
     #[test]
@@ -333,10 +350,20 @@ mod tests {
         let noisies = board.noisy_moves();
         assert_eq!(noisies.len(), 3, "{noisies:?}");
         let mut history = History::new();
-        history.update_on_cutoff(&board, noisies[2], &[], &noisies[..1], 4);
-        assert_eq!(history.noisy().get(&board, noisies[2]), 950);
-        assert_eq!(history.noisy().get(&board, noisies[0]), -950);
-        assert_eq!(history.noisy().get(&board, noisies[1]), 0, "not tried");
+        history.update_on_cutoff(&board, board.threats(), noisies[2], &[], &noisies[..1], 4);
+        assert_eq!(
+            history.noisy().get(&board, board.threats(), noisies[2]),
+            950
+        );
+        assert_eq!(
+            history.noisy().get(&board, board.threats(), noisies[0]),
+            -950
+        );
+        assert_eq!(
+            history.noisy().get(&board, board.threats(), noisies[1]),
+            0,
+            "not tried"
+        );
     }
 
     /// The rook capture Rxd5 in `board`.
@@ -358,9 +385,15 @@ mod tests {
             .parse()
             .expect("valid FEN");
         let mut history = NoisyHistory::new();
-        history.update(&guarded, rook_takes_d5(&guarded), 950);
-        assert_eq!(history.get(&guarded, rook_takes_d5(&guarded)), 950);
-        assert_eq!(history.get(&unguarded, rook_takes_d5(&unguarded)), 0);
+        history.update(&guarded, guarded.threats(), rook_takes_d5(&guarded), 950);
+        assert_eq!(
+            history.get(&guarded, guarded.threats(), rook_takes_d5(&guarded)),
+            950
+        );
+        assert_eq!(
+            history.get(&unguarded, unguarded.threats(), rook_takes_d5(&unguarded)),
+            0
+        );
     }
 
     #[test]
@@ -370,8 +403,8 @@ mod tests {
             .expect("valid FEN");
         let capture = rook_takes_d5(&board);
         let mut history = History::new();
-        history.update_on_cutoff(&board, capture, &[], &[], 4);
-        assert_eq!(history.noisy().get(&board, capture), 950);
+        history.update_on_cutoff(&board, board.threats(), capture, &[], &[], 4);
+        assert_eq!(history.noisy().get(&board, board.threats(), capture), 950);
     }
 
     #[test]

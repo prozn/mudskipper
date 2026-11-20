@@ -13,6 +13,18 @@ pub(super) const fn pawn(colour: Colour, square: Square) -> Bitboard {
     PAWN[colour.index()][square.index()]
 }
 
+/// Squares the pawns of `colour` in `pawns` attack, together.
+pub(super) const fn pawns(colour: Colour, pawns: Bitboard) -> Bitboard {
+    const NOT_FILE_A: u64 = !0x0101_0101_0101_0101;
+    const NOT_FILE_H: u64 = !0x8080_8080_8080_8080;
+    let towards_a = pawns.bits() & NOT_FILE_A;
+    let towards_h = pawns.bits() & NOT_FILE_H;
+    Bitboard::from_bits(match colour {
+        Colour::White => (towards_a << 7) | (towards_h << 9),
+        Colour::Black => (towards_a >> 9) | (towards_h >> 7),
+    })
+}
+
 /// Squares a knight on `square` attacks.
 pub(super) const fn knight(square: Square) -> Bitboard {
     KNIGHT[square.index()]

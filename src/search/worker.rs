@@ -11,7 +11,7 @@ use super::stop::StopFlag;
 use super::time::TimeLimit;
 use super::tt::{Bound, Entry, TranspositionTable};
 use super::window::Window;
-use crate::chess::{Board, Game, KeyHistory, Move, MoveList};
+use crate::chess::{Bitboard, Board, Game, KeyHistory, Move, MoveList};
 use crate::eval;
 
 /// Deepest iteration the search runs, leaving room in the principal variation table for
@@ -371,15 +371,17 @@ impl Worker {
         let mut best = -INFINITY;
         let mut best_move = None;
         let mut legal_moves = 0;
-        let mut quiets_tried = MoveList::new();
-        let mut noisies_tried = MoveList::new();
+        let mut tried = Tried::new();
         let mut picker = MovePicker::new(board, tt_move, self.killers.get(ply));
         while let Some(mv) = picker.next_move(&self.history) {
             if prunes_quiet(mv, node, depth, static_eval, best, window, legal_moves) {
                 picker.skip_quiets();
                 continue;
             }
-            if prunes_noisy(board, mv, node, depth, static_eval, best, &self.history)
+            let noisy_history = mv
+                .is_noisy()
+                .then(|| self.history.noisy().get(board, picker.threats(), mv));
+            if prunes_noisy(board, mv, node, depth, static_eval, best, noisy_history)
                 || !board.is_legal(mv)
             {
                 continue;
@@ -392,7 +394,8 @@ impl Worker {
                 && picker.is_handing_out_late_moves()
                 && is_reducible(&child, depth, legal_moves)
             {
-                let reduction = self.late_move_reduction(board, mv, node, depth, legal_moves);
+                let reduction =
+                    self.late_move_reduction(board, mv, noisy_history, node, depth, legal_moves);
                 Order::Later { reduction }
             } else {
                 Order::Later { reduction: 0 }
@@ -409,17 +412,13 @@ impl Worker {
                     best_move = Some(mv);
                     self.pv.update(ply, mv);
                     if score >= window.beta() {
-                        self.record_cutoff(board, ply, mv, &quiets_tried, &noisies_tried, depth);
+                        self.record_cutoff(board, picker.threats(), ply, mv, &tried, depth);
                         break;
                     }
                     window.raise_alpha(score);
                 }
             }
-            if mv.is_noisy() {
-                noisies_tried.push(mv);
-            } else {
-                quiets_tried.push(mv);
-            }
+            tried.push(mv);
         }
         if legal_moves == 0 {
             return if in_check { score::mated_in(ply) } else { DRAW };
@@ -479,7 +478,8 @@ impl Worker {
 
     /// The plies by which to reduce the late move `mv` from `board` (late move reduction),
     /// the `move_number`th legal move searched from a node of kind `node` searched to
-    /// `depth` plies.
+    /// `depth` plies. `noisy_history` is the move's noisy history, `None` for a quiet
+    /// move.
     ///
     /// The amount comes from a table that grows with the logarithms of the depth and move
     /// number, a milder one for noisy moves than for quiet ones, adjusted by the move's
@@ -490,18 +490,16 @@ impl Worker {
         &self,
         board: &Board,
         mv: Move,
+        noisy_history: Option<i32>,
         node: Node,
         depth: u32,
         move_number: u32,
     ) -> u32 {
-        let late_move = if mv.is_noisy() {
-            LateMove::Noisy {
-                history: self.history.noisy().get(board, mv),
-            }
-        } else {
-            LateMove::Quiet {
+        let late_move = match noisy_history {
+            Some(history) => LateMove::Noisy { history },
+            None => LateMove::Quiet {
                 history: self.history.quiet().get(board.side_to_move(), mv),
-            }
+            },
         };
         let pv_bonus = u32::from(node == Node::Pv);
         reduction::reduction(late_move, depth, move_number)
@@ -683,23 +681,23 @@ impl Worker {
         best
     }
 
-    /// Records that `mv` caused a beta cutoff in `board`, `ply` plies from the root, after
-    /// the quiet moves `quiets` and the noisy moves `noisies` failed to, `depth` plies
-    /// deep. A quiet move that cuts off also becomes a killer move at `ply`.
+    /// Records that `mv` caused a beta cutoff in `board`, whose opponent attacks `threats`,
+    /// `ply` plies from the root, after the moves in `tried` failed to, `depth` plies deep.
+    /// A quiet move that cuts off also becomes a killer move at `ply`.
     fn record_cutoff(
         &mut self,
         board: &Board,
+        threats: Bitboard,
         ply: usize,
         mv: Move,
-        quiets: &[Move],
-        noisies: &[Move],
+        tried: &Tried,
         depth: u32,
     ) {
         if !mv.is_noisy() {
             self.killers.update(ply, mv);
         }
         self.history
-            .update_on_cutoff(board, mv, quiets, noisies, depth);
+            .update_on_cutoff(board, threats, mv, &tried.quiets, &tried.noisies, depth);
     }
 
     /// Records the static evaluation of `board`, `ply` plies from the root, on the stack and
@@ -787,6 +785,31 @@ impl Worker {
     }
 }
 
+/// The moves searched so far at a node without causing a beta cutoff, quiet and noisy
+/// apart.
+struct Tried {
+    quiets: MoveList,
+    noisies: MoveList,
+}
+
+impl Tried {
+    fn new() -> Self {
+        Self {
+            quiets: MoveList::new(),
+            noisies: MoveList::new(),
+        }
+    }
+
+    /// Adds `mv` to the quiet or noisy moves, whichever it is.
+    fn push(&mut self, mv: Move) {
+        if mv.is_noisy() {
+            self.noisies.push(mv);
+        } else {
+            self.quiets.push(mv);
+        }
+    }
+}
+
 /// Reports whether a node of kind `node`, `depth` plies deep with static evaluation `eval`,
 /// stands so far above `beta` that it may return `eval` without searching (reverse
 /// futility pruning).
@@ -857,7 +880,8 @@ fn prunes_quiet(
 ///
 /// Noisy moves are skipped only where [`pruning_eval`] allows pruning, at most
 /// [`SEE_PRUNING_MAX_DEPTH`] deep, when static exchange evaluation falls below the
-/// [`see_pruning_threshold`] for the depth and the move's noisy history in `history`.
+/// [`see_pruning_threshold`] for the depth and the move's noisy history `noisy_history`,
+/// which is `None` for a quiet move, never skipped here.
 fn prunes_noisy(
     board: &Board,
     mv: Move,
@@ -865,15 +889,13 @@ fn prunes_noisy(
     depth: u32,
     static_eval: Option<i32>,
     best: i32,
-    history: &History,
+    noisy_history: Option<i32>,
 ) -> bool {
-    mv.is_noisy()
-        && depth <= SEE_PRUNING_MAX_DEPTH
-        && pruning_eval(node, static_eval, best).is_some()
-        && !board.see_ge(
-            mv,
-            see_pruning_threshold(depth, history.noisy().get(board, mv)),
-        )
+    noisy_history.is_some_and(|history| {
+        depth <= SEE_PRUNING_MAX_DEPTH
+            && pruning_eval(node, static_eval, best).is_some()
+            && !board.see_ge(mv, see_pruning_threshold(depth, history))
+    })
 }
 
 /// The material, in centipawns, below which static exchange evaluation lets SEE pruning

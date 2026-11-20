@@ -1,6 +1,6 @@
 //! Property tests over random legal games through the `chess` API (Seam 2).
 
-use mudskipper::chess::{Board, CastlingNotation};
+use mudskipper::chess::{Board, CastlingNotation, Square};
 use proptest::prelude::*;
 use proptest::sample::Index;
 
@@ -55,6 +55,17 @@ fn check_position(board: &Board, notations: &[CastlingNotation]) -> Result<(), T
         "Shredder-FEN {:?} does not round-trip",
         shredder
     );
+
+    let threats = board.threats();
+    for square in Square::ALL {
+        prop_assert_eq!(
+            threats.contains(square),
+            board.is_attacked_by_opponent(square),
+            "threat on {} in {:?}",
+            square,
+            fen
+        );
+    }
 
     for &mv in &board.legal_moves() {
         for &notation in notations {

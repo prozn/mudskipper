@@ -181,6 +181,27 @@ impl Board {
         self.is_attacked_by_opponent(self.king(self.side_to_move))
     }
 
+    /// Squares the pieces of the side not to move attack, with the pieces where they
+    /// stand: every square for which [`Board::is_attacked_by_opponent`] holds.
+    #[must_use]
+    pub fn threats(&self) -> Bitboard {
+        let them = !self.side_to_move;
+        let occupied = self.occupied();
+        let mut threats = attacks::pawns(them, self.pieces(them, PieceType::Pawn));
+        for piece_type in [
+            PieceType::Knight,
+            PieceType::Bishop,
+            PieceType::Rook,
+            PieceType::Queen,
+            PieceType::King,
+        ] {
+            for square in self.pieces(them, piece_type) {
+                threats = threats | attacks::piece(piece_type, square, occupied);
+            }
+        }
+        threats
+    }
+
     /// Reports whether a piece of the side not to move attacks `square`, with the pieces
     /// where they stand.
     #[must_use]
