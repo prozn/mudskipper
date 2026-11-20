@@ -9,11 +9,13 @@ repository = "https://github.com/prozn/mudskipper"
 readme = "README.md"
 publish = false
 
-# Every dependency is listed with its reason in ADR-0005.
+# Each dependency carries a comment giving its reason (ADR-0005).
 [dependencies]
 
 [dev-dependencies]
+# Benchmarks (benches/).
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+# Property tests.
 proptest = { version = "1", default-features = false, features = ["std"] }
 
 [[bench]]
