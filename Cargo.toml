@@ -9,7 +9,7 @@ repository = "https://github.com/prozn/mudskipper"
 readme = "README.md"
 publish = false
 
-# No runtime dependencies (ADR-0005).
+# Every dependency is listed with its reason in ADR-0005.
 [dependencies]
 
 [dev-dependencies]
