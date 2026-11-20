@@ -109,6 +109,12 @@ The general form is `hours = target / (aggregate_nps × 3600 / (1.5·S) × reten
 
 S = 10,000 is my choice, not a source's. It is near mudskipper's own depth-8 node count, so near Carp's first-network data, and twice akimbo's first-network budget. Stronger labels matter more for an engine whose evaluation is only PeSTO.
 
+**Measured (pilot, #81).** The pilot datagen at S = 10,000 replaces assumptions 2 and 4. It ran 225,000 games.
+
+- **Throughput:** **3,580 stored positions per second**, against 3,333 assumed (+7%). Datagen reports positions, not nodes, so 50 Mnps and 1.5·S stay unverified on their own. Only their ratio has been measured.
+- **Retention:** 30,753,835 stored positions splatted to 21,238,495, so the default filter keeps **69.1%**, against 65% assumed. That is about 137 stored positions per game.
+- **Usable per hour:** 3,580 × 3600 × 0.691 ≈ **8.9M**, against 7.8M in the table. 100M usable takes about **11.2 h** from scratch, or about **8.9 h** for the 78.8M left after reusing the pilot's data. The table estimated 12.8 h.
+
 ## 3. Question 2: data formats and a low-RAM pipeline
 
 ### bulletformat `ChessBoard`: 32 bytes per position
