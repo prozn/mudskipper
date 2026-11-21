@@ -198,7 +198,8 @@ impl Move {
 
     /// The square of the piece the move captures: the target square, or for en passant
     /// the square of the pawn that just moved, beside the capturing pawn.
-    pub(super) const fn captured_square(self) -> Square {
+    #[must_use]
+    pub(crate) const fn captured_square(self) -> Square {
         if self.is_en_passant() {
             Square::ALL[self.from().rank() as usize * 8 + self.to().file() as usize]
         } else {
@@ -207,12 +208,14 @@ impl Move {
     }
 
     /// The square the king lands on when castling, on the c- or g-file of its rank.
-    pub(super) const fn castling_king_target(self) -> Square {
+    #[must_use]
+    pub(crate) const fn castling_king_target(self) -> Square {
         self.castling_square(self.castling_files().0)
     }
 
     /// The square the rook lands on when castling, on the d- or f-file of its rank.
-    pub(super) const fn castling_rook_target(self) -> Square {
+    #[must_use]
+    pub(crate) const fn castling_rook_target(self) -> Square {
         self.castling_square(self.castling_files().1)
     }
 

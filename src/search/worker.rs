@@ -12,7 +12,7 @@ use super::time::TimeLimit;
 use super::tt::{Bound, Entry, TranspositionTable};
 use super::window::Window;
 use crate::chess::{Board, Game, KeyHistory, Move, MoveList};
-use crate::eval;
+use crate::eval::AccumulatorStack;
 
 /// Deepest iteration the search runs, leaving room in the principal variation table for
 /// the ply below it.
@@ -167,6 +167,9 @@ pub struct Worker {
     /// What the search knows about each node of the current line, by ply. One frame more
     /// than [`MAX_PLY`], since quiescence enters a child at the last ply before stopping.
     stack: [Frame; MAX_PLY + 1],
+    /// The **Accumulator** of each node of the current line, by ply, with as many entries
+    /// as `stack`.
+    accumulators: AccumulatorStack,
     nodes: u64,
     seldepth: usize,
     limits: Limits,
@@ -192,6 +195,7 @@ impl Worker {
             keys: KeyHistory::new(),
             tree: KeyHistory::new(),
             stack: [Frame::ROOT; MAX_PLY + 1],
+            accumulators: AccumulatorStack::new(MAX_PLY + 1),
             nodes: 0,
             seldepth: 0,
             limits: Limits::default(),
@@ -228,6 +232,7 @@ impl Worker {
         self.keys.clone_from(game.history());
         self.tree = KeyHistory::new();
         self.stack[0] = Frame::ROOT;
+        self.accumulators.refresh(board);
         self.killers = Killers::new();
         self.nodes = 0;
         self.seldepth = 0;
@@ -355,7 +360,7 @@ impl Worker {
             return DRAW;
         }
         if ply >= MAX_PLY - 1 {
-            return eval::evaluate(board);
+            return self.evaluate(board, ply);
         }
 
         let tt_entry = self.tt.probe(board.key(), ply);
@@ -401,7 +406,7 @@ impl Worker {
             } else {
                 Order::Later { reduction: 0 }
             };
-            self.enter(board, ply, Reached::Move);
+            self.enter(board, ply, Reached::Move(mv));
             let score = self.search_child(&child, depth - 1, ply + 1, window, node, order);
             self.leave();
             if self.stopped {
@@ -606,7 +611,7 @@ impl Worker {
             return DRAW;
         }
         if ply >= MAX_PLY {
-            return eval::evaluate(board);
+            return self.evaluate(board, ply);
         }
 
         let tt_entry = self.tt.probe(board.key(), ply);
@@ -624,7 +629,7 @@ impl Worker {
         let mut moves = if in_check {
             MovePicker::new(board, tt_move, [None; 2])
         } else {
-            let static_eval = static_eval(board, tt_entry);
+            let static_eval = self.static_eval(board, ply, tt_entry);
             eval = Some(static_eval);
             best = static_eval;
             if best >= window.beta() {
@@ -653,7 +658,7 @@ impl Worker {
             }
             legal_moves += 1;
             let child = board.make(mv);
-            self.enter(board, ply, Reached::Move);
+            self.enter(board, ply, Reached::Move(mv));
             let score = -self.quiescence(&child, ply + 1, window.negated());
             self.leave();
             if self.stopped {
@@ -716,7 +721,7 @@ impl Worker {
         in_check: bool,
         entry: Option<Entry>,
     ) -> Option<i32> {
-        let eval = (!in_check).then(|| static_eval(board, entry));
+        let eval = (!in_check).then(|| self.static_eval(board, ply, entry));
         self.stack[ply].static_eval = eval;
         eval
     }
@@ -765,9 +770,29 @@ impl Worker {
         self.keys.push(board.key());
         self.tree.push(board.key());
         self.stack[ply + 1].null_ply = match reached {
-            Reached::Move => self.stack[ply].null_ply,
-            Reached::NullMove => Some(ply + 1),
+            Reached::Move(mv) => {
+                self.accumulators.make(ply, board, mv);
+                self.stack[ply].null_ply
+            }
+            Reached::NullMove => {
+                self.accumulators.pass(ply);
+                Some(ply + 1)
+            }
         };
+    }
+
+    /// The static evaluation of `board`, `ply` plies from the root, read from its
+    /// transposition table `entry` when that holds one.
+    fn static_eval(&self, board: &Board, ply: usize, entry: Option<Entry>) -> i32 {
+        entry
+            .and_then(|entry| entry.eval)
+            .unwrap_or_else(|| self.evaluate(board, ply))
+    }
+
+    /// Evaluates `board`, `ply` plies from the root, with the network, from the
+    /// accumulator `enter` left for it. The score stays below any mate score.
+    fn evaluate(&self, board: &Board, ply: usize) -> i32 {
+        score::clamp_eval(self.accumulators.get(ply).evaluate(board.side_to_move()))
     }
 
     /// Undoes the matching [`Worker::enter`] on returning from a child.
@@ -913,14 +938,6 @@ fn tt_cutoff(entry: Option<Entry>, node: Node, depth: u32, window: Window) -> Op
         .map(|entry| entry.score)
 }
 
-/// The static evaluation of `board`, read from its transposition table `entry` when that
-/// holds one.
-fn static_eval(board: &Board, entry: Option<Entry>) -> i32 {
-    entry
-        .and_then(|entry| entry.eval)
-        .unwrap_or_else(|| eval::evaluate(board))
-}
-
 /// What the search knows about one node of the current line.
 #[derive(Clone, Copy, Debug)]
 struct Frame {
@@ -952,7 +969,7 @@ enum Order {
 /// How the search reached a node from its parent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reached {
-    Move,
+    Move(Move),
     NullMove,
 }
 

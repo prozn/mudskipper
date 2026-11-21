@@ -11,8 +11,8 @@ replying with `info` lines and a `bestmove`. `go` accepts `depth`, `nodes`, `mov
 `infinite`, and the clock parameters `wtime`, `btime`, `winc`, `binc` and `movestogo`.
 Commands are read on their own thread, so `stop` and `isready` are answered during a
 search; other commands sent during a search wait until it ends. The search is an
-alpha-beta search with quiescence search and a **Transposition table**, over a
-PeSTO-style tapered evaluation.
+alpha-beta search with quiescence search and a **Transposition table**, over an NNUE
+evaluation: a `(768 → 128)x2 → 1` **Network** embedded in the binary.
 
 It offers these UCI options:
 
@@ -49,17 +49,39 @@ the default of 5.
 Mudskipper needs Rust 1.99. The version is pinned in `rust-toolchain.toml`, so `rustup`
 installs and selects it automatically. There are no runtime dependencies.
 
+The **Network** is embedded at build time and lives outside this repo, as release assets
+of [prozn/mudskipper-networks](https://github.com/prozn/mudskipper-networks).
+`network.txt` names the default one. `make net` downloads it with `curl` to
+`networks/default.bin` in the git-ignored `networks/` directory, which a build embeds. Run it once before the first `cargo` build, and again whenever `network.txt`
+changes:
+
 ```sh
+make net
 cargo build --release
 ./target/release/mudskipper
 ```
 
-Or use the Makefile, which names the binary with the `EXE` variable:
+Or use the Makefile, which fetches the network itself and names the binary with the
+`EXE` variable:
 
 ```sh
 make EXE=mudskipper
 ./mudskipper
 ```
+
+To embed another network file, set `EVALFILE` to its path. `cargo` needs an absolute
+path; the Makefile accepts a relative one and then fetches nothing. `make
+networks/<name>.bin` fetches any other published network:
+
+```sh
+make networks/pilot-128-wdl75.bin
+make EXE=mudskipper-wdl75 EVALFILE=networks/pilot-128-wdl75.bin
+```
+
+The Makefile needs GNU make 4.0 or later and `curl`. It runs from `cmd.exe` and
+PowerShell as well as from a Unix shell.
+
+A network file of the wrong size for the engine's architecture fails the build.
 
 The default build is portable: it uses only the baseline instruction set for your
 target, so the binary runs on any machine of the same architecture.
@@ -109,7 +131,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-CI runs the same three checks on Linux and Windows. It also checks that `bench` reports
+CI runs the same three checks on Linux and Windows, with the network fetched by
+`make net`. It also checks that `bench` reports
 the node count given by the `Bench:` line of the head commit message.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, SPRT and commit message workflow.
 

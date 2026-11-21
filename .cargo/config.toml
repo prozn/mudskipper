@@ -1,0 +1,5 @@
+[env]
+# The network file embedded in the engine (ADR-0004). `make net` fetches the network
+# named in network.txt to this path. Set EVALFILE in the environment, as an absolute
+# path, to embed another file instead.
+EVALFILE = { value = "networks/default.bin", relative = true }
