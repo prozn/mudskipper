@@ -12,6 +12,17 @@ const MATE: i32 = 32_000;
 /// The lowest score that still means the side to move mates.
 const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 
+/// Clamps a static evaluation to stay below every mate score.
+pub(super) const fn clamp_eval(eval: i32) -> i32 {
+    if eval >= MATE_BOUND {
+        MATE_BOUND - 1
+    } else if eval <= -MATE_BOUND {
+        -MATE_BOUND + 1
+    } else {
+        eval
+    }
+}
+
 /// The score of a draw.
 pub(super) const DRAW: i32 = 0;
 

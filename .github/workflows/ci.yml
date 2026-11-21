@@ -21,6 +21,17 @@ jobs:
       # Installs the toolchain and components pinned in rust-toolchain.toml.
       - name: Install toolchain
         run: rustup toolchain install
+      # Fetches the network the build embeds, as a local build does, cached on its name.
+      - name: Cache network
+        uses: actions/cache@v4
+        with:
+          path: networks
+          key: network-${{ hashFiles('network.txt') }}
+      - name: Fetch network
+        shell: bash
+        run: |
+          command -v make || choco install make --no-progress
+          make net
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -38,9 +49,18 @@ jobs:
         run: cargo build --release --locked --features datagen
       - name: Makefile build
         shell: bash
+        run: make EXE=mudskipper-ci
+      # A network file of the wrong size must fail the build, not load garbage.
+      - name: Wrong-size network fails
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          command -v make || choco install make --no-progress
-          make EXE=mudskipper-ci
+          head -c 1024 networks/default.bin > "$RUNNER_TEMP/short.bin"
+          if EVALFILE="$RUNNER_TEMP/short.bin" cargo check --locked 2> "$RUNNER_TEMP/check.log"; then
+            echo "::error::a build with a 1024-byte network succeeded"
+            exit 1
+          fi
+          grep "wrong size" "$RUNNER_TEMP/check.log"
 
   # Checks the Bench signature in the head commit message. Runs on Windows too, so the
   # two platforms must agree with the commit and therefore with each other.
@@ -59,6 +79,17 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install toolchain
         run: rustup toolchain install
+      # Fetches the network the build embeds, as a local build does, cached on its name.
+      - name: Cache network
+        uses: actions/cache@v4
+        with:
+          path: networks
+          key: network-${{ hashFiles('network.txt') }}
+      - name: Fetch network
+        shell: bash
+        run: |
+          command -v make || choco install make --no-progress
+          make net
       - name: Build
         run: cargo build --release --locked
       - name: Check Bench signature
