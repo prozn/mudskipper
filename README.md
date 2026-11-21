@@ -51,9 +51,8 @@ installs and selects it automatically. There are no runtime dependencies.
 
 The **Network** is embedded at build time and lives outside this repo, as release assets
 of [prozn/mudskipper-networks](https://github.com/prozn/mudskipper-networks).
-`network.txt` names the default one. `make net` downloads it with `curl` into the
-git-ignored `networks/` directory and copies it to `networks/default.bin`, which a build
-embeds. Run it once before the first `cargo` build, and again whenever `network.txt`
+`network.txt` names the default one. `make net` downloads it with `curl` to
+`networks/default.bin` in the git-ignored `networks/` directory, which a build embeds. Run it once before the first `cargo` build, and again whenever `network.txt`
 changes:
 
 ```sh
@@ -71,11 +70,16 @@ make EXE=mudskipper
 ```
 
 To embed another network file, set `EVALFILE` to its path. `cargo` needs an absolute
-path; the Makefile accepts a relative one and then fetches nothing:
+path; the Makefile accepts a relative one and then fetches nothing. `make
+networks/<name>.bin` fetches any other published network:
 
 ```sh
-make EXE=mudskipper-test EVALFILE=path/to/quantised.bin
+make networks/pilot-128-wdl75.bin
+make EXE=mudskipper-wdl75 EVALFILE=networks/pilot-128-wdl75.bin
 ```
+
+The Makefile needs GNU make 4.0 or later and `curl`. It runs from `cmd.exe` and
+PowerShell as well as from a Unix shell.
 
 A network file of the wrong size for the engine's architecture fails the build.
 
