@@ -12,7 +12,7 @@ replying with `info` lines and a `bestmove`. `go` accepts `depth`, `nodes`, `mov
 Commands are read on their own thread, so `stop` and `isready` are answered during a
 search; other commands sent during a search wait until it ends. The search is an
 alpha-beta search with quiescence search and a **Transposition table**, over an NNUE
-evaluation: a `(768 → 128)x2 → 1` **Network** embedded in the binary.
+evaluation: a `(768 → 256)x2 → 1` **Network** embedded in the binary.
 
 It offers these UCI options:
 
@@ -74,8 +74,8 @@ path; the Makefile accepts a relative one and then fetches nothing. `make
 networks/<name>.bin` fetches any other published network:
 
 ```sh
-make networks/pilot-128-wdl75.bin
-make EXE=mudskipper-wdl75 EVALFILE=networks/pilot-128-wdl75.bin
+make networks/<name>.bin
+make EXE=mudskipper-<name> EVALFILE=networks/<name>.bin
 ```
 
 The Makefile needs GNU make 4.0 or later and `curl`. It runs from `cmd.exe` and

@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 
 /// Neurons in the hidden layer, per perspective. A multiple of 32, so that every row of
 /// `HIDDEN` `i16`s fills whole 64-byte cache lines.
-pub const HIDDEN: usize = 128;
+pub const HIDDEN: usize = 256;
 
 /// Input features per perspective: 2 colours × 6 piece types × 64 squares.
 pub const INPUTS: usize = 768;
