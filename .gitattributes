@@ -1,0 +1,2 @@
+# Read by the Makefile, which needs the name without a carriage return.
+network.txt text eol=lf

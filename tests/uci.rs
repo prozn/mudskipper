@@ -432,7 +432,12 @@ fn eval_of_the_start_position_is_small() {
 #[test]
 fn eval_favours_the_side_with_extra_material() {
     let mut engine = Engine::start();
-    let score = eval_score(&mut engine, "4k3/8/8/8/8/8/8/3QK3 w - - 0 1");
+    // The start position without Black's queen. Training data never has fewer than four
+    // pieces, so a bare king and queen against a king would test the data, not the eval.
+    let score = eval_score(
+        &mut engine,
+        "rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    );
     assert!(
         score > 500,
         "an extra queen should score well for white: {score}"
@@ -596,9 +601,10 @@ fn go_depth_finds_mate_in_one_and_mate_in_two() {
 fn deep_searches_report_exact_mate_scores() {
     // Deep enough that later iterations search the root inside an aspiration window: one
     // around a mate score, or, for the mate in four, around the centipawn score of the
-    // iterations before the mate is seen, which the mate must fail high out of. The mate in
-    // four is first seen at depth 12, where late move pruning stops skipping the quiet rook
-    // moves that deliver it, so that is as deep as the search needs to go.
+    // iterations before the mate is seen, which the mate must fail high out of. When the
+    // mate in four is first proved depends on the evaluation, through late move pruning of
+    // the quiet rook moves that deliver it: depth 12 with PeSTO, 13 with the pilot networks.
+    // Depth 14 leaves a ply to spare.
     let cases = [
         ("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", Some("a1a8"), "mate 1"),
         (
@@ -616,7 +622,7 @@ fn deep_searches_report_exact_mate_scores() {
     let mut engine = Engine::start();
     for (fen, mating_move, score) in cases {
         engine.send(&format!("position fen {fen}"));
-        let reply = search(&mut engine, "depth 12");
+        let reply = search(&mut engine, "depth 14");
         if let Some(mating_move) = mating_move {
             assert_eq!(best_move(&reply), mating_move, "best move in {fen}");
         }
@@ -648,8 +654,8 @@ fn mates_are_scored_exactly_when_the_static_evaluation_says_otherwise() {
 
 #[test]
 fn perpetual_check_finishes_depth_10_within_its_node_limit() {
-    // Black's doubled rooks win the queen as soon as White stops checking, but Qg5+ starts a
-    // perpetual: Kf8 Qd8+ Kg7 Qg5+ and round again.
+    // Black's doubled rooks win the queen as soon as White stops checking, but Qg5+ or Qd8+
+    // starts a perpetual: Qg5+ Kf8 Qd8+ Kg7 Qg5+ and round again.
     // Every Black node in the line is in check and extended, so a search that let the
     // extensions run on unchecked would hit the node limit before depth 10.
     let limit = 600_000;
@@ -665,7 +671,11 @@ fn perpetual_check_finishes_depth_10_within_its_node_limit() {
         "stopped short of depth 10 with a limit of {limit} nodes: {last:?}"
     );
     assert_eq!(final_score(&reply), "cp 0", "perpetual check is a draw");
-    assert_eq!(best_move(&reply), "d2g5", "Qg5+ starts the perpetual");
+    let best = best_move(&reply);
+    assert!(
+        ["d2g5", "d2d8"].contains(&best),
+        "{best} does not start the perpetual"
+    );
 }
 
 #[test]
@@ -881,7 +891,8 @@ fn go_drops_an_invalid_value_with_an_info_string_and_keeps_the_other_limits() {
 #[test]
 fn go_depth_does_not_score_a_twofold_repetition_of_the_game_as_a_draw() {
     // Ke1-d1 would repeat a position from the game for only the second time, which is not
-    // a draw, so White is still lost whatever it plays.
+    // a draw, so White is still lost whatever it plays. The bound only needs to tell a loss
+    // from a draw: the network has not seen positions this bare, and scores them low.
     let mut engine = Engine::start();
     engine.send("position fen 4k2q/8/8/8/8/8/8/4K3 w - - 0 1 moves e1d1 h8h7 d1e1 h7h8");
     let reply = search(&mut engine, "depth 2");
@@ -890,7 +901,7 @@ fn go_depth_does_not_score_a_twofold_repetition_of_the_game_as_a_draw() {
         .strip_prefix("cp ")
         .and_then(|cp| cp.parse().ok())
         .unwrap_or_else(|| panic!("expected a centipawn score, got {score:?}"));
-    assert!(cp < -500, "White is a queen down but scored {cp}");
+    assert!(cp < -200, "White is a queen down but scored {cp}");
 }
 
 /// Starts an infinite search, waits until it has reported its first iteration, and returns
