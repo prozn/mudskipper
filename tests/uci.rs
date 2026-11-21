@@ -603,8 +603,8 @@ fn deep_searches_report_exact_mate_scores() {
     // around a mate score, or, for the mate in four, around the centipawn score of the
     // iterations before the mate is seen, which the mate must fail high out of. When the
     // mate in four is first proved depends on the evaluation, through late move pruning of
-    // the quiet rook moves that deliver it: depth 12 with PeSTO, 13 with the pilot networks.
-    // Depth 14 leaves a ply to spare.
+    // the quiet rook moves that deliver it: depth 12 with PeSTO, 13 with the pilot networks
+    // and 7 with gen1-256. Depth 14 leaves a ply to spare.
     let cases = [
         ("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", Some("a1a8"), "mate 1"),
         (
