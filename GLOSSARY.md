@@ -8,6 +8,18 @@ A UCI chess engine. This glossary fixes the vocabulary used across code, issues,
 A sequential probability ratio test run as engine-vs-engine games to decide whether a change gains Elo, within chosen error bounds. Run manually, outside this repo.
 _Avoid_: Elo test, match
 
+**SPSA**:
+Tuning a set of **Search parameters** together by playing games between copies of the engine with the parameters nudged randomly up and down, and moving each parameter towards the side that scored better. It finds values but proves nothing: a tuned set still needs an **SPRT**.
+_Avoid_: Tuner (for the method), auto-tuning
+
+**Search parameter**:
+A search constant exposed to **SPSA**, with a default, a range it may move within, and a step size.
+_Avoid_: Tunable, knob, config value
+
+**Tune build**:
+A build of the engine that lets **SPSA** set each **Search parameter** while it plays. Every other build fixes them at their defaults, and with the defaults the tune build has the same **Bench signature**.
+_Avoid_: Tuning branch (for the build itself), SPSA build
+
 **Bench**:
 A fixed, deterministic search over a fixed set of positions whose total node count identifies the engine's search behaviour.
 _Avoid_: Benchmark (ambiguous with micro-benchmarks), speedtest
