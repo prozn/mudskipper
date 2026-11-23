@@ -131,3 +131,106 @@ fastchess \
 
 For LTC, change `tc=8+0.08` to `tc=40+0.4`. For non-regression, use `elo0=-10 elo1=0`. Set `-concurrency` to the number of physical cores,
 leaving one free. `-variant fischerandom` turns `UCI_Chess960` on in both engines.
+
+## SPSA tuning
+
+**Search parameters** are tuned in groups with **SPSA** on a self-hosted
+[OpenBench](https://github.com/AndyGrant/OpenBench) instance, then the tuned set goes
+through an SPRT as one change. SPSA finds values but proves nothing, so a tuned set is
+never merged without its SPRT. OpenBench is used only for SPSA; SPRTs stay on fastchess.
+
+### Engine entry
+
+Set up the server and client as described in OpenBench's wiki,
+[Creating Your OpenBench Instance](https://github.com/AndyGrant/OpenBench/wiki/Creating-Your-OpenBench-Instance).
+Then add the engine on the server's Manage Engines page, or load this file with
+`python3 manage.py import_engines mudskipper.json`:
+
+```json
+{
+    "private": false,
+    "nps": <bench nps of the client>,
+    "source": "https://github.com/prozn/mudskipper",
+    "build": {
+        "path": "openbench/tune",
+        "compilers": ["cargo>=1.99"],
+        "cpuflags": [],
+        "systems": ["Linux"]
+    }
+}
+```
+
+`"path": "openbench/tune"` makes OpenBench build the **Tune build** with the makefile in
+that directory, which runs the root Makefile with `FEATURES=tune`, so the network is
+fetched as in every other build. Replace the `nps` placeholder with the nps the client machine's
+`bench` reports, which OpenBench uses to scale time controls, and set `systems` to its
+operating system. A run starts straight from `main` or a PR branch; no
+tuning branch is needed.
+
+### Workload input
+
+The **Tune build** prints the workload input from its parameter table, one line per
+**Search parameter**:
+
+```sh
+make -C openbench/tune EXE=mudskipper-tune CPU=native
+./openbench/tune/mudskipper-tune spsa
+```
+
+```text
+RFP_MARGIN, int, 80, 40, 160, 8, 0.002
+FP_BASE_MARGIN, int, 90, 20, 250, 12, 0.002
+...
+```
+
+Each line is `name, int, value, min, max, C_end, R_end`. Paste the lines for the group
+being tuned into the workload's parameters. C_end is about 1/20 of each parameter's
+range, so that each perturbation is worth a few Elo; R_end is 0.002 for every parameter.
+
+### Hyperparameters
+
+Use these for every run:
+
+| Setting | Value |
+|---|---|
+| α (alpha) | 0.602 |
+| γ (gamma) | 0.101 |
+| A-ratio | 0.1 |
+| R_end | 0.002 (printed by `spsa`) |
+| Pairs per iteration | 8 |
+| Reporting | Batched |
+| Distribution | Single |
+
+### The run
+
+- **Time control**: STC, 8+0.08, with `Threads=1` and `Hash=16`, and the DFRC book as for
+  SPRTs, so that a tune plays under the conditions its SPRT will. If the server doesn't
+  list the book, add it on the Manage Books page. Keep `FRC` in its name: OpenBench plays
+  **Chess960** only when the book's name contains `FRC`, `960` or `FISCHER`.
+- **Iterations**: 3,000, which at 8 pairs is 48,000 games, about 19 hours on 14 cores.
+- **Stopping early**: only when no parameter has moved after about 5,000 games. Then the
+  run is useless as set up: raise the C_end of the parameters that stayed put and start
+  again. A run that is merely slow is left to finish.
+
+### When a parameter ends at a bound
+
+A parameter that ends a run at its min or max may have a better value outside the range.
+Widen its range in the parameter table, keeping C_end at about 1/20 of the new range, and
+tune the group again from the tuned values. Don't narrow a range to hold a parameter back:
+clipping at a bound hides which way the parameter wants to move. R_end, not the range,
+limits how far it moves.
+
+### Baking in the results
+
+1. Round the final values and write them into the parameter table as the new defaults,
+   in one PR for the group.
+2. Bump the patch version in `Cargo.toml`.
+3. Run Bench and put the new `Bench:` line in the commit message.
+4. Run an SPRT at STC `[0.00, 10.00]` (8+0.08), then at LTC `[0.00, 10.00]` (40+0.4), and
+   put both summaries in the commit message.
+
+### When the gain is too small to pass
+
+A tuned set is often worth only a few Elo, which usually fails `[0.00, 10.00]`. Don't
+narrow the bounds. Keep the branch, fold its values into the next group's tune, and
+SPRT the combined set, whose gain is large enough to measure.

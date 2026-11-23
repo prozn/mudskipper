@@ -38,7 +38,6 @@ pub(crate) struct Param {
     /// The largest value the parameter may be set to.
     pub(crate) max: i32,
     /// The step SPSA perturbs the parameter by at the end of a tuning run.
-    #[expect(dead_code, reason = "the spsa subcommand prints it in a later ticket")]
     pub(crate) c_end: i32,
     value: AtomicI32,
 }

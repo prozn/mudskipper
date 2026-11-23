@@ -2,7 +2,8 @@
 //!
 //! With no arguments it runs the UCI loop. `bench [depth]` runs **Bench** and exits. With
 //! the `datagen` feature, `datagen <threads> <games-or-0> <out-dir>` writes self-play
-//! **Training data**.
+//! **Training data**. In the **Tune build** (the `tune` feature), `spsa` prints the
+//! OpenBench SPSA workload input.
 
 use std::env;
 #[cfg(feature = "datagen")]
@@ -19,6 +20,8 @@ use mudskipper::search::StopFlag;
 use mudskipper::tools::bench;
 #[cfg(feature = "datagen")]
 use mudskipper::tools::datagen;
+#[cfg(feature = "tune")]
+use mudskipper::tools::spsa;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -42,6 +45,8 @@ fn main() -> ExitCode {
             };
             run_datagen(threads, limit, out_dir)
         }
+        #[cfg(feature = "tune")]
+        ["spsa"] => spsa::run(&mut io::stdout().lock()),
         _ => return usage(&format!("unexpected arguments {:?}", args.join(" "))),
     };
     match result {
@@ -90,5 +95,7 @@ fn usage(problem: &str) -> ExitCode {
     eprintln!("usage: mudskipper [bench [depth]]");
     #[cfg(feature = "datagen")]
     eprintln!("       mudskipper datagen <threads> <games-or-0> <out-dir>");
+    #[cfg(feature = "tune")]
+    eprintln!("       mudskipper spsa");
     ExitCode::FAILURE
 }
