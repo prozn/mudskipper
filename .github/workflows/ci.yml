@@ -36,14 +36,17 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+      # Lints each build that ships on its own: release (above), datagen and tune.
       - name: Clippy (datagen)
         run: cargo clippy --all-targets --locked --features datagen -- -D warnings
-      # Runs every test, including datagen's.
+      - name: Clippy (tune)
+        run: cargo clippy --all-targets --locked --features tune -- -D warnings
+      # Runs every test, including datagen's and the Tune build's.
       - name: Test
-        run: cargo test --locked --features datagen
+        run: cargo test --locked --features datagen,tune
       - name: Docs
         if: runner.os == 'Linux'
-        run: cargo doc --no-deps --locked --features datagen
+        run: cargo doc --no-deps --locked --features datagen,tune
       # The normal release build, without datagen, is built by the bench job.
       - name: Build (datagen)
         run: cargo build --release --locked --features datagen
@@ -98,3 +101,14 @@ jobs:
           engine=target/release/mudskipper
           [[ -f $engine.exe ]] && engine=$engine.exe
           .github/scripts/check-bench.sh "$engine"
+      # The Tune build, built as OpenBench builds it, must give the same Bench signature:
+      # its Search parameters start at the defaults every other build fixes.
+      - name: Build (tune)
+        shell: bash
+        run: make EXE=mudskipper-tune FEATURES=tune
+      - name: Check Bench signature (tune)
+        shell: bash
+        run: |
+          engine=mudskipper-tune
+          [[ -f $engine.exe ]] && engine=$engine.exe
+          .github/scripts/check-bench.sh "./$engine"

@@ -5,6 +5,10 @@ use std::time::{Duration, Instant};
 use super::MAX_PLY;
 use super::history::{History, Killers};
 use super::ordering::MovePicker;
+use super::params::{
+    ASPIRATION_DELTA, FP_BASE_MARGIN, FP_DEPTH_MARGIN, RFP_MARGIN, SEE_PRUNING_DEPTH_MARGIN,
+    SEE_PRUNING_HISTORY_DIVISOR,
+};
 use super::reduction::{self, LateMove};
 use super::score::{self, DRAW, INFINITY, Score};
 use super::stop::StopFlag;
@@ -32,12 +36,6 @@ const IIR_MIN_DEPTH: u32 = 4;
 /// stage. Shallower iterations' scores swing too much between depths to aim at; lowering
 /// it risks more re-searches, raising it searches more iterations with the full window.
 const ASPIRATION_MIN_DEPTH: u32 = 4;
-
-/// Half the width of the first aspiration window, in centipawns, within the range of 10
-/// to 25 common among open-source engines at a similar stage. The window grows by half
-/// each time the score falls outside it. A narrower window cuts off more of the tree but
-/// misses more often, each miss costing a re-search.
-const ASPIRATION_DELTA: i32 = 20;
 
 /// Shallowest depth at which null-move pruning is tried, the threshold common among
 /// open-source engines at a similar stage. Lowering it prunes more shallow nodes, where
@@ -72,23 +70,10 @@ const LMR_FULL_DEPTH_MOVES: u32 = 3;
 /// poorer guide to the searched score.
 const RFP_MAX_DEPTH: u32 = 7;
 
-/// The margin per ply of depth by which the static evaluation must clear beta for reverse
-/// futility pruning, in centipawns, as common among open-source engines at a similar
-/// stage. A smaller margin prunes more nodes but misses more threats.
-const RFP_MARGIN: i32 = 80;
-
 /// Deepest depth at which quiet moves are skipped when the static evaluation is too far
 /// below alpha for them to reach it (futility pruning), within the range common among
 /// open-source engines at a similar stage.
 const FP_MAX_DEPTH: u32 = 6;
-
-/// The margin, in centipawns, a quiet move is allowed to gain over the static evaluation
-/// at any depth for futility pruning. A smaller margin prunes more quiet moves.
-const FP_BASE_MARGIN: i32 = 90;
-
-/// The margin futility pruning allows per ply of depth beyond [`FP_BASE_MARGIN`], in
-/// centipawns, since a deeper search has more moves in which to win material back.
-const FP_DEPTH_MARGIN: i32 = 60;
 
 /// Deepest depth at which quiet moves are skipped once enough moves have been searched
 /// (late move pruning), within the range common among open-source engines at a similar
@@ -103,16 +88,6 @@ const LMP_BASE_MOVES: u32 = 3;
 /// Deepest depth at which a noisy move is skipped when it loses too much material by
 /// static exchange evaluation (SEE pruning), the same as [`FP_MAX_DEPTH`].
 const SEE_PRUNING_MAX_DEPTH: u32 = FP_MAX_DEPTH;
-
-/// The material, in centipawns, SEE pruning lets a noisy move lose per ply of depth before
-/// skipping it. Stormphrax, whose threshold has the same shape, uses 111. A larger margin
-/// prunes fewer moves.
-const SEE_PRUNING_DEPTH_MARGIN: i32 = 90;
-
-/// The divisor of noisy history in the SEE pruning threshold, close to Stormphrax's 65: a
-/// noisy move with full history may lose about 2.5 pawns more. A larger divisor weighs
-/// history less.
-const SEE_PRUNING_HISTORY_DIVISOR: i32 = 64;
 
 /// When a search stops. A search with no limits runs to the deepest supported depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -281,7 +256,7 @@ impl Worker {
     /// the window, the window is widened on that side and the root searched again, until
     /// the score lands inside it.
     fn search_root(&mut self, board: &Board, depth: u32, previous: Option<i32>) -> i32 {
-        let mut delta = ASPIRATION_DELTA;
+        let mut delta = ASPIRATION_DELTA.get();
         let mut window = match previous {
             Some(previous) if depth >= ASPIRATION_MIN_DEPTH => Window::aspiration(previous, delta),
             _ => Window::FULL,
@@ -832,7 +807,7 @@ fn reverse_futility_prunes(node: Node, depth: u32, eval: i32, beta: i32) -> bool
     node == Node::NonPv
         && depth <= RFP_MAX_DEPTH
         && !score::is_mate(beta)
-        && eval - RFP_MARGIN * depth as i32 >= beta
+        && eval - RFP_MARGIN.get() * depth as i32 >= beta
 }
 
 /// Reports whether a late move that reached `child` as the `move_number`th legal move
@@ -880,7 +855,7 @@ fn prunes_quiet(
         return false;
     };
     let futile = depth <= FP_MAX_DEPTH
-        && eval + FP_BASE_MARGIN + FP_DEPTH_MARGIN * depth as i32 <= window.alpha();
+        && eval + FP_BASE_MARGIN.get() + FP_DEPTH_MARGIN.get() * depth as i32 <= window.alpha();
     let late = depth <= LMP_MAX_DEPTH && legal_moves >= LMP_BASE_MOVES + depth * depth / 2;
     futile || late
 }
@@ -916,7 +891,9 @@ fn prunes_noisy(
 /// The threshold falls with depth and with good history, and never rises above zero, so a
 /// noisy move that does not lose material is never skipped however bad its history.
 fn see_pruning_threshold(depth: u32, noisy_history: i32) -> i32 {
-    (-SEE_PRUNING_DEPTH_MARGIN * depth as i32 - noisy_history / SEE_PRUNING_HISTORY_DIVISOR).min(0)
+    (-SEE_PRUNING_DEPTH_MARGIN.get() * depth as i32
+        - noisy_history / SEE_PRUNING_HISTORY_DIVISOR.get())
+    .min(0)
 }
 
 /// Whether a node lies on the principal variation: the root, the first move searched from
