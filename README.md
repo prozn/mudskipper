@@ -123,6 +123,12 @@ arrives on standard input; `stop` also ends a run with a game count early, once 
 thread finishes its current game. Progress (games, positions and positions per second)
 prints every ten seconds.
 
+## Tune build
+
+The `tune` Cargo feature builds the **Tune build**, which exposes every **Search
+parameter** as a UCI option for **SPSA** tuning on OpenBench. [CONTRIBUTING.md](CONTRIBUTING.md#spsa-tuning)
+describes how to build it and run a tune.
+
 ## Development
 
 ```sh

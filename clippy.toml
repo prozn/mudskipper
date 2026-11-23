@@ -1,0 +1,3 @@
+# Names doc_markdown should read as prose, not as code needing backticks. ".." keeps
+# Clippy's built-in list.
+doc-valid-idents = ["OpenBench", ".."]
