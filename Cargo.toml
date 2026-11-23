@@ -25,6 +25,9 @@ viriformat = "=2.0.1"
 # The `datagen` command, which writes self-play training data. Off by default, so a
 # normal build never compiles it.
 datagen = []
+# The **Tune build**: every **Search parameter** becomes a UCI option that SPSA sets
+# during play. Off by default, so every other build fixes them at compile time.
+tune = []
 
 [[bench]]
 name = "movegen"

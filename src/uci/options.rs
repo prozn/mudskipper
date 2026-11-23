@@ -2,9 +2,12 @@
 
 use std::fmt;
 use std::io::{self, Write};
+use std::str::FromStr;
 use std::time::Duration;
 
 use super::Mode;
+#[cfg(feature = "tune")]
+use crate::search::params;
 
 /// A UCI option of type `spin`: an integer within a range.
 struct Spin {
@@ -17,17 +20,39 @@ struct Spin {
 impl Spin {
     /// Parses `value` as a setting of this option.
     fn parse(&self, value: Option<&str>) -> Result<u32, SetOptionError> {
-        let expected = || format!("an integer from {} to {}", self.min, self.max);
-        let value = value.ok_or_else(|| SetOptionError::MissingValue(expected()))?;
-        value
-            .parse()
-            .ok()
-            .filter(|n| (self.min..=self.max).contains(n))
-            .ok_or_else(|| SetOptionError::InvalidValue {
-                value: value.to_owned(),
-                expected: expected(),
-            })
+        parse_in_range(value, self.min, self.max)
     }
+}
+
+/// Parses `value` as an integer from `min` to `max`, the setting of a spin option.
+fn parse_in_range<T>(value: Option<&str>, min: T, max: T) -> Result<T, SetOptionError>
+where
+    T: Copy + FromStr + PartialOrd + fmt::Display,
+{
+    let expected = || format!("an integer from {min} to {max}");
+    let value = value.ok_or_else(|| SetOptionError::MissingValue(expected()))?;
+    value
+        .parse()
+        .ok()
+        .filter(|n| (min..=max).contains(n))
+        .ok_or_else(|| SetOptionError::InvalidValue {
+            value: value.to_owned(),
+            expected: expected(),
+        })
+}
+
+/// Writes the `option` line of the reply to `uci` for a spin option.
+fn write_spin<T: fmt::Display>(
+    output: &mut impl Write,
+    name: &str,
+    default: T,
+    min: T,
+    max: T,
+) -> io::Result<()> {
+    writeln!(
+        output,
+        "option name {name} type spin default {default} min {min} max {max}"
+    )
 }
 
 /// Size of the transposition table in megabytes.
@@ -89,13 +114,14 @@ impl Options {
     pub fn write_uci(output: &mut impl Write) -> io::Result<()> {
         writeln!(output, "option name {CHESS960} type check default false")?;
         for spin in [&HASH, &THREADS, &MOVE_OVERHEAD] {
-            writeln!(
-                output,
-                "option name {} type spin default {} min {} max {}",
-                spin.name, spin.default, spin.min, spin.max
-            )?;
+            write_spin(output, spin.name, spin.default, spin.min, spin.max)?;
         }
-        writeln!(output, "option name {CLEAR_HASH} type button")
+        writeln!(output, "option name {CLEAR_HASH} type button")?;
+        #[cfg(feature = "tune")]
+        for param in params::ALL {
+            write_spin(output, param.name, param.default, param.min, param.max)?;
+        }
+        Ok(())
     }
 
     /// Applies a `setoption` command, and says whether the caller has more to do.
@@ -103,7 +129,8 @@ impl Options {
     /// Option names are matched ignoring case, as the UCI protocol asks. `Clear Hash`
     /// changes no option: it returns [`Applied::ClearHash`] so that the caller, which owns
     /// the search state, resets it. Likewise a new `Hash` returns [`Applied::ResizeHash`]
-    /// so that the caller resizes the table. On error no option changes.
+    /// so that the caller resizes the table. In the **Tune build**, a **Search parameter**
+    /// is set at once, for the next search to use. On error no option changes.
     pub fn set(&mut self, line: &str) -> Result<Applied, SetOptionError> {
         let args: Vec<&str> = line.split_whitespace().skip(1).collect();
         let Some((&"name", rest)) = args.split_first() else {
@@ -140,6 +167,11 @@ impl Options {
             }
             return Ok(Applied::ClearHash);
         } else {
+            #[cfg(feature = "tune")]
+            if let Some(param) = params::ALL.iter().find(|param| is(param.name)) {
+                param.set(parse_in_range(value, param.min, param.max)?);
+                return Ok(Applied::Stored);
+            }
             return Err(SetOptionError::UnknownOption(name));
         }
         Ok(Applied::Stored)

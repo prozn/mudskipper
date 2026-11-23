@@ -6,6 +6,7 @@
 
 mod history;
 mod ordering;
+pub(crate) mod params;
 mod reduction;
 mod score;
 mod stop;
