@@ -101,9 +101,18 @@ jobs:
           engine=target/release/mudskipper
           [[ -f $engine.exe ]] && engine=$engine.exe
           .github/scripts/check-bench.sh "$engine"
-      # The Tune build, built as OpenBench builds it (`make -j EXE=…` in openbench/tune),
-      # must give the same Bench signature: its Search parameters start at the defaults
-      # every other build fixes.
+      # The OpenBench builds, built as OpenBench builds them (`make -j EXE=…` in their
+      # directory), must give the same Bench signature. The Tune build's Search parameters
+      # start at the defaults every other build fixes.
+      - name: Build (OpenBench sprt)
+        shell: bash
+        run: make -C openbench/sprt -j EXE=mudskipper-sprt
+      - name: Check Bench signature (OpenBench sprt)
+        shell: bash
+        run: |
+          engine=openbench/sprt/mudskipper-sprt
+          [[ -f $engine.exe ]] && engine=$engine.exe
+          .github/scripts/check-bench.sh "./$engine"
       - name: Build (tune)
         shell: bash
         run: make -C openbench/tune -j EXE=mudskipper-tune
