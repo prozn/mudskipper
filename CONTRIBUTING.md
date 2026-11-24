@@ -141,6 +141,17 @@ server doesn't list the book, add it on the Manage Books page. Keep `FRC`, `960`
 `FISCHER` out of its name: OpenBench plays **Chess960** when the name contains any of them.
 Every opening is played twice, once with each colour.
 
+### Adjudication
+
+Every SPRT and tune ends games early with the same settings:
+
+- **Win**: `movecount=3 score=600`. A game is adjudicated a win once the score has stayed
+  at 600 centipawns or more in one side's favour for 3 moves.
+- **Draw**: `movenumber=40 movecount=8 score=10`. After move 40, a game is adjudicated a
+  draw once both scores stay within 10 centipawns of zero for 8 moves.
+- **Syzygy**: none. Mudskipper doesn't probe tablebases, and games aren't adjudicated by
+  them, so Syzygy adjudication and Syzygy WDL are both `DISABLED` on OpenBench.
+
 ## SPRT setup
 
 ### Time controls
@@ -179,6 +190,9 @@ Create a test on OpenBench with these fields:
 | Dev and Base time control | `8.0+0.08` (STC) or `40.0+0.4` (LTC) |
 | Dev and Base network | empty, so that each builds with its own `network.txt` |
 | Opening book | `UHO_Lichess_4852_v1.epd` |
+| Win adjudication | `movecount=3 score=600` |
+| Draw adjudication | `movenumber=40 movecount=8 score=10` |
+| Syzygy adjudication, Syzygy WDL | `DISABLED` |
 | Test mode | SPRT |
 | Bounds | `[0.00, 10.00]` or `[-10.00, 0.00]`, from the table above |
 | Confidence | `[0.05, 0.05]` |
@@ -193,7 +207,7 @@ commit message.
 An SPRT can also run locally with [fastchess](https://github.com/Disservin/fastchess).
 Build both engines with `target-cpu=native` as described in the README's
 [Building for SPRT](README.md#building-for-sprt) section, and use the same time controls,
-bounds and book:
+bounds, book and adjudication:
 
 ```sh
 fastchess \
@@ -201,6 +215,8 @@ fastchess \
   -engine cmd=./mudskipper-main name=main \
   -each proto=uci tc=8+0.08 option.Threads=1 option.Hash=16 \
   -openings file=UHO_Lichess_4852_v1.epd format=epd order=random \
+  -resign movecount=3 score=600 \
+  -draw movenumber=40 movecount=8 score=10 \
   -games 2 -repeat -rounds 50000 \
   -concurrency 8 \
   -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 model=normalized \
@@ -256,9 +272,9 @@ Use these for every run:
 
 ### The run
 
-- **Time control**: STC, 8+0.08, with `Threads=1` and `Hash=16`, and the UHO
-  [opening book](#opening-book), as for SPRTs, so that a tune plays under the conditions
-  its SPRT will.
+- **Time control**: STC, 8+0.08, with `Threads=1` and `Hash=16`, the UHO
+  [opening book](#opening-book) and the [adjudication](#adjudication) settings, as for
+  SPRTs, so that a tune plays under the conditions its SPRT will.
 - **Iterations**: 3,000, which at 8 pairs is 48,000 games, about 19 hours on 14 cores.
 - **Stopping early**: only when no parameter has moved after about 5,000 games. Then the
   run is useless as set up: raise the C_end of the parameters that stayed put and start
