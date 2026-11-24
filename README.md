@@ -88,7 +88,9 @@ target, so the binary runs on any machine of the same architecture.
 
 ## Building for SPRT
 
-Both engines in an **SPRT** must be built the same way. Build each one from its own
+SPRTs run on OpenBench, which builds both engines itself with the makefile in
+`openbench/sprt` (see [CONTRIBUTING.md](CONTRIBUTING.md#openbench)). To run one locally
+with fastchess instead, build both engines the same way. Build each one from its own
 checkout with `target-cpu=native`, giving each binary a distinct name:
 
 ```sh
