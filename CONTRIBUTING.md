@@ -280,6 +280,32 @@ Use these for every run:
   run is useless as set up: raise the C_end of the parameters that stayed put and start
   again. A run that is merely slow is left to finish.
 
+### Tracking the run
+
+OpenBench keeps only each parameter's current value: the tune page's Show SPSA Digest
+button gives a table of current, start, min, max, C and R, but no history and no graphs.
+To see how the parameters move, which is how you tell a converged parameter from one still
+drifting, record the digest with OpenBench's `Scripts/spsa/track_spsa.py` from the moment
+the tune starts. Earlier values can't be recovered.
+
+```sh
+git clone https://github.com/AndyGrant/OpenBench
+python3 OpenBench/Scripts/spsa/track_spsa.py --spsa <tune id> \
+  -S <server URL> -U <username> -P <password>
+```
+
+- **Tune id**: the number in the tune page's URL.
+- **Credentials**: your OpenBench login, or the `OPENBENCH_SERVER`, `OPENBENCH_USERNAME`
+  and `OPENBENCH_PASSWORD` environment variables instead of `-S`, `-U` and `-P`. It needs
+  Python's `requests` package.
+- **Output**: one snapshot every 2 minutes (`--interval` sets the minutes), appended to
+  `spsa.<tune id>.log` in `OpenBench/Scripts/spsa/`. Each line is a JSON array of a
+  timestamp, the tune's info and the digest as CSV text.
+- **Stopping**: it never stops by itself, even when the tune finishes; stop it with
+  Ctrl-C once the tune is done.
+
+Keep the log: the PR plots each parameter's value over time from it.
+
 ### When a parameter ends at a bound
 
 A parameter that ends a run at its min or max may have a better value outside the range.
