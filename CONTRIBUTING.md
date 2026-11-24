@@ -132,12 +132,14 @@ the engine's name). Both are the same apart from the path:
 
 ### Opening book
 
-Games start from **DFRC** openings, which spread positions widely and exercise
-**Chess960** castling: the `DFRC_openings.epd` book from the
-[official-stockfish/books](https://github.com/official-stockfish/books) repository. If the
-server doesn't list it, add it on the Manage Books page. Keep `FRC` in its name: OpenBench
-plays **Chess960** only when the book's name contains `FRC`, `960` or `FISCHER`. Every
-opening is played twice, once with each colour.
+Games start from the `UHO_Lichess_4852_v1.epd` book from the
+[official-stockfish/books](https://github.com/official-stockfish/books) repository
+(distributed there zipped). UHO (Unbalanced Human Openings) positions are standard-chess
+openings chosen so that one side has a clear edge, which makes games more decisive than
+balanced openings and each game more informative, while staying close to real play. If the
+server doesn't list the book, add it on the Manage Books page. Keep `FRC`, `960` and
+`FISCHER` out of its name: OpenBench plays **Chess960** when the name contains any of them.
+Every opening is played twice, once with each colour.
 
 ## SPRT setup
 
@@ -176,7 +178,7 @@ Create a test on OpenBench with these fields:
 | Dev and Base options | `Threads=1 Hash=16` |
 | Dev and Base time control | `8.0+0.08` (STC) or `40.0+0.4` (LTC) |
 | Dev and Base network | empty, so that each builds with its own `network.txt` |
-| Opening book | `DFRC_openings.epd` |
+| Opening book | `UHO_Lichess_4852_v1.epd` |
 | Test mode | SPRT |
 | Bounds | `[0.00, 10.00]` or `[-10.00, 0.00]`, from the table above |
 | Confidence | `[0.05, 0.05]` |
@@ -198,8 +200,7 @@ fastchess \
   -engine cmd=./mudskipper-dev name=dev \
   -engine cmd=./mudskipper-main name=main \
   -each proto=uci tc=8+0.08 option.Threads=1 option.Hash=16 \
-  -variant fischerandom \
-  -openings file=DFRC_openings.epd format=epd order=random \
+  -openings file=UHO_Lichess_4852_v1.epd format=epd order=random \
   -games 2 -repeat -rounds 50000 \
   -concurrency 8 \
   -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 model=normalized \
@@ -208,9 +209,8 @@ fastchess \
 ```
 
 For LTC, change `tc=8+0.08` to `tc=40+0.4`. For non-regression, use `elo0=-10 elo1=0`.
-Set `-concurrency` to the number of physical cores, leaving one free.
-`-variant fischerandom` turns `UCI_Chess960` on in both engines. Write the result in the
-commit message in the same form, taking Penta from fastchess's `Ptnml(0-2)` line.
+Set `-concurrency` to the number of physical cores, leaving one free. Write the result in
+the commit message in the same form, taking Penta from fastchess's `Ptnml(0-2)` line.
 
 ## SPSA tuning
 
@@ -256,7 +256,7 @@ Use these for every run:
 
 ### The run
 
-- **Time control**: STC, 8+0.08, with `Threads=1` and `Hash=16`, and the DFRC
+- **Time control**: STC, 8+0.08, with `Threads=1` and `Hash=16`, and the UHO
   [opening book](#opening-book), as for SPRTs, so that a tune plays under the conditions
   its SPRT will.
 - **Iterations**: 3,000, which at 8 pairs is 48,000 games, about 19 hours on 14 cores.
