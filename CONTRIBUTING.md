@@ -304,7 +304,18 @@ python3 OpenBench/Scripts/spsa/track_spsa.py --spsa <tune id> \
 - **Stopping**: it never stops by itself, even when the tune finishes; stop it with
   Ctrl-C once the tune is done.
 
-Keep the log: the PR plots each parameter's value over time from it.
+Keep the log. When the tune is done, plot it for the PR with
+`openbench/tune/plot_spsa.py`, which needs only Python's standard library:
+
+```sh
+python3 openbench/tune/plot_spsa.py spsa.<tune id>.log <group>.svg
+```
+
+It writes one chart per parameter, each spanning the parameter's full range with a dashed
+line at the start value, and ignores snapshots after the tune finished. It also prints how
+far each parameter moved over the last quarter of the games, in units of its C_end: one
+still moving by more than about half a C_end hadn't settled when the run ended. Attach the
+SVG to the PR with the final values.
 
 ### When a parameter ends at a bound
 
