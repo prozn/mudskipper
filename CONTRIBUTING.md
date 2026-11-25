@@ -132,12 +132,25 @@ the engine's name). Both are the same apart from the path:
 
 ### Opening book
 
-Games start from **DFRC** openings, which spread positions widely and exercise
-**Chess960** castling: the `DFRC_openings.epd` book from the
-[official-stockfish/books](https://github.com/official-stockfish/books) repository. If the
-server doesn't list it, add it on the Manage Books page. Keep `FRC` in its name: OpenBench
-plays **Chess960** only when the book's name contains `FRC`, `960` or `FISCHER`. Every
-opening is played twice, once with each colour.
+Games start from the `UHO_Lichess_4852_v1.epd` book from the
+[official-stockfish/books](https://github.com/official-stockfish/books) repository
+(distributed there zipped). UHO (Unbalanced Human Openings) positions are standard-chess
+openings chosen so that one side has a clear edge, which makes games more decisive than
+balanced openings and each game more informative, while staying close to real play. If the
+server doesn't list the book, add it on the Manage Books page. Keep `FRC`, `960` and
+`FISCHER` out of its name: OpenBench plays **Chess960** when the name contains any of them.
+Every opening is played twice, once with each colour.
+
+### Adjudication
+
+Every SPRT and tune ends games early with the same settings:
+
+- **Win**: `movecount=3 score=600`. A game is adjudicated a win once the score has stayed
+  at 600 centipawns or more in one side's favour for 3 moves.
+- **Draw**: `movenumber=40 movecount=8 score=10`. After move 40, a game is adjudicated a
+  draw once both scores stay within 10 centipawns of zero for 8 moves.
+- **Syzygy**: none. Mudskipper doesn't probe tablebases, and games aren't adjudicated by
+  them, so Syzygy adjudication and Syzygy WDL are both `DISABLED` on OpenBench.
 
 ## SPRT setup
 
@@ -176,7 +189,10 @@ Create a test on OpenBench with these fields:
 | Dev and Base options | `Threads=1 Hash=16` |
 | Dev and Base time control | `8.0+0.08` (STC) or `40.0+0.4` (LTC) |
 | Dev and Base network | empty, so that each builds with its own `network.txt` |
-| Opening book | `DFRC_openings.epd` |
+| Opening book | `UHO_Lichess_4852_v1.epd` |
+| Win adjudication | `movecount=3 score=600` |
+| Draw adjudication | `movenumber=40 movecount=8 score=10` |
+| Syzygy adjudication, Syzygy WDL | `DISABLED` |
 | Test mode | SPRT |
 | Bounds | `[0.00, 10.00]` or `[-10.00, 0.00]`, from the table above |
 | Confidence | `[0.05, 0.05]` |
@@ -191,15 +207,16 @@ commit message.
 An SPRT can also run locally with [fastchess](https://github.com/Disservin/fastchess).
 Build both engines with `target-cpu=native` as described in the README's
 [Building for SPRT](README.md#building-for-sprt) section, and use the same time controls,
-bounds and book:
+bounds, book and adjudication:
 
 ```sh
 fastchess \
   -engine cmd=./mudskipper-dev name=dev \
   -engine cmd=./mudskipper-main name=main \
   -each proto=uci tc=8+0.08 option.Threads=1 option.Hash=16 \
-  -variant fischerandom \
-  -openings file=DFRC_openings.epd format=epd order=random \
+  -openings file=UHO_Lichess_4852_v1.epd format=epd order=random \
+  -resign movecount=3 score=600 \
+  -draw movenumber=40 movecount=8 score=10 \
   -games 2 -repeat -rounds 50000 \
   -concurrency 8 \
   -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 model=normalized \
@@ -208,9 +225,8 @@ fastchess \
 ```
 
 For LTC, change `tc=8+0.08` to `tc=40+0.4`. For non-regression, use `elo0=-10 elo1=0`.
-Set `-concurrency` to the number of physical cores, leaving one free.
-`-variant fischerandom` turns `UCI_Chess960` on in both engines. Write the result in the
-commit message in the same form, taking Penta from fastchess's `Ptnml(0-2)` line.
+Set `-concurrency` to the number of physical cores, leaving one free. Write the result in
+the commit message in the same form, taking Penta from fastchess's `Ptnml(0-2)` line.
 
 ## SPSA tuning
 
@@ -256,13 +272,39 @@ Use these for every run:
 
 ### The run
 
-- **Time control**: STC, 8+0.08, with `Threads=1` and `Hash=16`, and the DFRC
-  [opening book](#opening-book), as for SPRTs, so that a tune plays under the conditions
-  its SPRT will.
+- **Time control**: STC, 8+0.08, with `Threads=1` and `Hash=16`, the UHO
+  [opening book](#opening-book) and the [adjudication](#adjudication) settings, as for
+  SPRTs, so that a tune plays under the conditions its SPRT will.
 - **Iterations**: 3,000, which at 8 pairs is 48,000 games, about 19 hours on 14 cores.
 - **Stopping early**: only when no parameter has moved after about 5,000 games. Then the
   run is useless as set up: raise the C_end of the parameters that stayed put and start
   again. A run that is merely slow is left to finish.
+
+### Tracking the run
+
+OpenBench keeps only each parameter's current value: the tune page's Show SPSA Digest
+button gives a table of current, start, min, max, C and R, but no history and no graphs.
+To see how the parameters move, which is how you tell a converged parameter from one still
+drifting, record the digest with OpenBench's `Scripts/spsa/track_spsa.py` from the moment
+the tune starts. Earlier values can't be recovered.
+
+```sh
+git clone https://github.com/AndyGrant/OpenBench
+python3 OpenBench/Scripts/spsa/track_spsa.py --spsa <tune id> \
+  -S <server URL> -U <username> -P <password>
+```
+
+- **Tune id**: the number in the tune page's URL.
+- **Credentials**: your OpenBench login, or the `OPENBENCH_SERVER`, `OPENBENCH_USERNAME`
+  and `OPENBENCH_PASSWORD` environment variables instead of `-S`, `-U` and `-P`. It needs
+  Python's `requests` package.
+- **Output**: one snapshot every 2 minutes (`--interval` sets the minutes), appended to
+  `spsa.<tune id>.log` in `OpenBench/Scripts/spsa/`. Each line is a JSON array of a
+  timestamp, the tune's info and the digest as CSV text.
+- **Stopping**: it never stops by itself, even when the tune finishes; stop it with
+  Ctrl-C once the tune is done.
+
+Keep the log: the PR plots each parameter's value over time from it.
 
 ### When a parameter ends at a bound
 
