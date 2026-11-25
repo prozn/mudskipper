@@ -247,8 +247,8 @@ make -C openbench/tune EXE=mudskipper-tune
 ```
 
 ```text
-RFP_MARGIN, int, 80, 40, 160, 8, 0.002
-FP_BASE_MARGIN, int, 90, 20, 250, 12, 0.002
+RFP_MARGIN, int, 49, 40, 160, 8, 0.002
+FP_BASE_MARGIN, int, 104, 20, 250, 12, 0.002
 ...
 ```
 

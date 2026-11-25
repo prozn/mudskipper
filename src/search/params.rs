@@ -101,32 +101,33 @@ macro_rules! search_params {
 
 search_params! {
     /// The margin per ply of depth by which the static evaluation must clear beta for
-    /// reverse futility pruning, in centipawns, as common among open-source engines at a
-    /// similar stage. A smaller margin prunes more nodes but misses more threats.
-    RFP_MARGIN: 80, 40..=160, c_end 8;
+    /// reverse futility pruning, in centipawns, tuned by SPSA with the network (#84). A
+    /// smaller margin prunes more nodes but misses more threats.
+    RFP_MARGIN: 49, 40..=160, c_end 8;
 
     /// The margin, in centipawns, a quiet move is allowed to gain over the static
-    /// evaluation at any depth for futility pruning. A smaller margin prunes more quiet
-    /// moves.
-    FP_BASE_MARGIN: 90, 20..=250, c_end 12;
+    /// evaluation at any depth for futility pruning, tuned by SPSA (#84). A smaller margin
+    /// prunes more quiet moves.
+    FP_BASE_MARGIN: 104, 20..=250, c_end 12;
 
     /// The margin futility pruning allows per ply of depth beyond [`FP_BASE_MARGIN`], in
     /// centipawns, since a deeper search has more moves in which to win material back.
-    FP_DEPTH_MARGIN: 60, 20..=160, c_end 7;
+    /// Tuned by SPSA (#84).
+    FP_DEPTH_MARGIN: 59, 20..=160, c_end 7;
 
     /// The material, in centipawns, SEE pruning lets a noisy move lose per ply of depth
-    /// before skipping it. Stormphrax, whose threshold has the same shape, uses 111. A
-    /// larger margin prunes fewer moves.
-    SEE_PRUNING_DEPTH_MARGIN: 90, 30..=180, c_end 8;
+    /// before skipping it, tuned by SPSA (#84). Stormphrax, whose threshold has the same
+    /// shape, uses 111. A larger margin prunes fewer moves.
+    SEE_PRUNING_DEPTH_MARGIN: 88, 30..=180, c_end 8;
 
-    /// The divisor of noisy history in the SEE pruning threshold, close to Stormphrax's
-    /// 65: a noisy move with full history may lose about 2.5 pawns more. A larger divisor
-    /// weighs history less.
-    SEE_PRUNING_HISTORY_DIVISOR: 64, 16..=256, c_end 10;
+    /// The divisor of noisy history in the SEE pruning threshold, tuned by SPSA (#84): a
+    /// noisy move with full history may lose about 2.2 pawns more. Stormphrax uses 65. A
+    /// larger divisor weighs history less.
+    SEE_PRUNING_HISTORY_DIVISOR: 76, 16..=256, c_end 10;
 
-    /// Half the width of the first aspiration window, in centipawns, within the range of
-    /// 10 to 25 common among open-source engines at a similar stage. The window grows by
-    /// half each time the score falls outside it. A narrower window cuts off more of the
+    /// Half the width of the first aspiration window, in centipawns, tuned by SPSA (#84)
+    /// and within the range of 10 to 25 common among open-source engines. The window grows
+    /// by half each time the score falls outside it. A narrower window cuts off more of the
     /// tree but misses more often, each miss costing a re-search.
-    ASPIRATION_DELTA: 20, 5..=50, c_end 2;
+    ASPIRATION_DELTA: 19, 5..=50, c_end 2;
 }

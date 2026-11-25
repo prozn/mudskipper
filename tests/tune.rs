@@ -7,14 +7,14 @@ mod common;
 
 use common::Engine;
 
-/// Group A, as #94 lists it: name, default, min and max.
+/// Group A, as #94 lists it, with the defaults tuned in #84: name, default, min and max.
 const GROUP_A: [(&str, i32, i32, i32); 6] = [
-    ("RFP_MARGIN", 80, 40, 160),
-    ("FP_BASE_MARGIN", 90, 20, 250),
-    ("FP_DEPTH_MARGIN", 60, 20, 160),
-    ("SEE_PRUNING_DEPTH_MARGIN", 90, 30, 180),
-    ("SEE_PRUNING_HISTORY_DIVISOR", 64, 16, 256),
-    ("ASPIRATION_DELTA", 20, 5, 50),
+    ("RFP_MARGIN", 49, 40, 160),
+    ("FP_BASE_MARGIN", 104, 20, 250),
+    ("FP_DEPTH_MARGIN", 59, 20, 160),
+    ("SEE_PRUNING_DEPTH_MARGIN", 88, 30, 180),
+    ("SEE_PRUNING_HISTORY_DIVISOR", 76, 16, 256),
+    ("ASPIRATION_DELTA", 19, 5, 50),
 ];
 
 #[test]
