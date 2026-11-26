@@ -1,6 +1,18 @@
-//! The late move reduction tables, built in integer arithmetic at compile time so that
-//! they, and with them the **Bench signature**, are the same on every platform, and the
-//! history adjustments made to them.
+//! The late move reduction tables, and the history adjustments made to them.
+//!
+//! The tables are built in integer arithmetic so that they, and with them the **Bench
+//! signature**, are the same on every platform: at compile time from the **Search
+//! parameters**' defaults in a normal build, and whenever one of their parameters is set
+//! in the **Tune build**.
+
+#[cfg(feature = "tune")]
+use std::sync::{LazyLock, Mutex, MutexGuard};
+
+#[cfg(feature = "tune")]
+use super::params::Param;
+use super::params::{
+    HISTORY_DIVISOR, NOISY_LMR_BASE, NOISY_LMR_DIVISOR, QUIET_LMR_BASE, QUIET_LMR_DIVISOR,
+};
 
 /// A **Late move** to reduce, with its history in the table for its kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,58 +23,161 @@ pub(super) enum LateMove {
     Noisy { history: i32 },
 }
 
-/// A late move is reduced a ply less for each this much history, if its history is
-/// positive: about 2 plies at the maximum history. Lowering it lets history protect more
-/// moves from reduction.
-const HISTORY_DIVISOR: i32 = 8_192;
-
-/// The plies `late_move` is reduced by at `depth` plies deep when it is the
-/// `move_number`th legal move searched, before the search's own adjustments: the entry in
-/// its table, [`QUIET_TABLE`] or [`NOISY_TABLE`], lowered by a ply for each
-/// [`HISTORY_DIVISOR`] of positive history, and never below zero. Negative history is
-/// ignored.
-pub(super) fn reduction(late_move: LateMove, depth: u32, move_number: u32) -> u32 {
-    let (table, history) = match late_move {
-        LateMove::Quiet { history } => (&QUIET_TABLE, history),
-        LateMove::Noisy { history } => (&NOISY_TABLE, history),
-    };
-    let index = |n: u32| usize::try_from(n).map_or(TABLE_SIZE - 1, |n| n.min(TABLE_SIZE - 1));
-    let base = u32::from(table[index(depth)][index(move_number)]);
-    // Negative history fails the conversion and counts as none.
-    let history_bonus = u32::try_from(history / HISTORY_DIVISOR).unwrap_or(0);
-    base.saturating_sub(history_bonus)
+/// The reduction tables one worker searches with.
+///
+/// In a normal build it holds nothing and reads tables built at compile time from the
+/// **Search parameters**' defaults. In the **Tune build** it holds its own copy of the
+/// shared tables, taken by [`refresh`](Self::refresh) when a search starts, so that the
+/// search never waits on a lock.
+#[derive(Clone, Debug)]
+pub(super) struct Reductions {
+    #[cfg(feature = "tune")]
+    tables: Tables,
 }
 
-/// A reduction of `base + ln(depth) * ln(move number) / divisor` plies, rounded down, with
-/// the base and divisor as exact fractions. Raising the base reduces every move more;
-/// lowering the divisor makes the reduction grow faster with depth and move number.
+impl Reductions {
+    /// Returns the tables for the current **Search parameters**.
+    pub(super) fn new() -> Self {
+        Self {
+            #[cfg(feature = "tune")]
+            tables: shared_tables().clone(),
+        }
+    }
+
+    /// Takes up the tables for the current **Search parameters**, which in the **Tune
+    /// build** may have been rebuilt since the last search.
+    #[cfg_attr(
+        not(feature = "tune"),
+        expect(
+            clippy::unused_self,
+            reason = "only the Tune build keeps tables per worker"
+        )
+    )]
+    pub(super) fn refresh(&mut self) {
+        #[cfg(feature = "tune")]
+        self.tables.clone_from(&shared_tables());
+    }
+
+    /// The plies `late_move` is reduced by at `depth` plies deep when it is the
+    /// `move_number`th legal move searched, before the search's own adjustments: the entry
+    /// in its table, quiet or noisy, lowered by a ply for each [`HISTORY_DIVISOR`] of
+    /// positive history, and never below zero. Negative history is ignored.
+    #[cfg_attr(
+        not(feature = "tune"),
+        expect(
+            clippy::unused_self,
+            reason = "only the Tune build keeps tables per worker"
+        )
+    )]
+    pub(super) fn reduction(&self, late_move: LateMove, depth: u32, move_number: u32) -> u32 {
+        #[cfg(feature = "tune")]
+        let tables = &self.tables;
+        #[cfg(not(feature = "tune"))]
+        let tables = &DEFAULT_TABLES;
+        let (table, history) = match late_move {
+            LateMove::Quiet { history } => (&tables.quiet, history),
+            LateMove::Noisy { history } => (&tables.noisy, history),
+        };
+        let index = |n: u32| usize::try_from(n).map_or(TABLE_SIZE - 1, |n| n.min(TABLE_SIZE - 1));
+        let base = u32::from(table[index(depth)][index(move_number)]);
+        // Negative history fails the conversion and counts as none.
+        let history_bonus = u32::try_from(history / HISTORY_DIVISOR.get()).unwrap_or(0);
+        base.saturating_sub(history_bonus)
+    }
+}
+
+/// A reduction of `base + ln(depth) * ln(move number) / divisor` plies, rounded down and
+/// never below zero, with the base and divisor in units of 1 / [`FORMULA_SCALE`]. Raising
+/// the base reduces every move more; lowering the divisor makes the reduction grow faster
+/// with depth and move number.
+#[derive(Clone, Copy, Debug)]
 struct Formula {
-    base_numerator: u128,
-    base_denominator: u128,
-    divisor_numerator: u128,
-    divisor_denominator: u128,
+    base: i32,
+    divisor: i32,
 }
 
-/// The quiet move formula: 0.75 + ln(depth) * ln(move number) / 2.25, as common among
-/// open-source engines at a similar stage.
-const QUIET: Formula = Formula {
-    base_numerator: 3,
-    base_denominator: 4,
-    divisor_numerator: 9,
-    divisor_denominator: 4,
-};
+/// The quiet and noisy reduction tables.
+#[derive(Clone, Debug)]
+struct Tables {
+    quiet: Table,
+    noisy: Table,
+}
 
-/// The noisy move formula: 0.14 + ln(depth) * ln(move number) / 3.65. Noisy moves are
-/// forcing, so they are reduced less than quiet moves. Weiss's capture table is the model,
-/// but relative to mudskipper's own quiet table: the constants are [`QUIET`]'s, scaled by
-/// the ratios between Weiss's capture and quiet tables (0.38 + ln·ln / 3.76 against 2.01 + ln·ln / 2.32): the base by 0.38 / 2.01 and the
-/// divisor by 3.76 / 2.32, rounded to two decimal places.
-const NOISY: Formula = Formula {
-    base_numerator: 7,
-    base_denominator: 50,
-    divisor_numerator: 73,
-    divisor_denominator: 20,
-};
+impl Tables {
+    /// Builds the tables from the current values of their **Search parameters**.
+    #[cfg(feature = "tune")]
+    fn from_params() -> Self {
+        Self::build(
+            Formula {
+                base: QUIET_LMR_BASE.get(),
+                divisor: QUIET_LMR_DIVISOR.get(),
+            },
+            Formula {
+                base: NOISY_LMR_BASE.get(),
+                divisor: NOISY_LMR_DIVISOR.get(),
+            },
+        )
+    }
+
+    /// Builds the tables of the `quiet` and `noisy` formulas.
+    const fn build(quiet: Formula, noisy: Formula) -> Self {
+        Self {
+            quiet: build_table(quiet),
+            noisy: build_table(noisy),
+        }
+    }
+}
+
+/// The tables at the **Search parameters**' defaults, built at compile time.
+#[cfg(not(feature = "tune"))]
+static DEFAULT_TABLES: Tables = Tables::build(
+    Formula {
+        base: QUIET_LMR_BASE.get(),
+        divisor: QUIET_LMR_DIVISOR.get(),
+    },
+    Formula {
+        base: NOISY_LMR_BASE.get(),
+        divisor: NOISY_LMR_DIVISOR.get(),
+    },
+);
+
+/// The tables for the current **Search parameters**, which workers copy when a search
+/// starts.
+#[cfg(feature = "tune")]
+static SHARED: LazyLock<Mutex<Tables>> = LazyLock::new(|| Mutex::new(Tables::from_params()));
+
+/// Locks [`SHARED`]. Callers hold the lock only to copy or replace the tables.
+#[cfg(feature = "tune")]
+fn shared_tables() -> MutexGuard<'static, Tables> {
+    SHARED.lock().expect("reduction tables lock poisoned")
+}
+
+/// The **Search parameters** the tables are built from.
+#[cfg(feature = "tune")]
+const TABLE_PARAMS: [&Param; 4] = [
+    &QUIET_LMR_BASE,
+    &QUIET_LMR_DIVISOR,
+    &NOISY_LMR_BASE,
+    &NOISY_LMR_DIVISOR,
+];
+
+/// Rebuilds the shared tables if `param` is one they are built from, which the caller has
+/// just set. Workers take up the new tables at the start of their next search.
+#[cfg(feature = "tune")]
+pub(super) fn param_changed(param: &Param) {
+    if TABLE_PARAMS
+        .iter()
+        .any(|table_param| std::ptr::eq(*table_param, param))
+    {
+        let tables = Tables::from_params();
+        *shared_tables() = tables;
+    }
+}
+
+/// What a [`Formula`]'s base and divisor are multiplied by: their **Search parameters**
+/// are in hundredths, so that a UCI spin option can carry them and a step of 1 is a small
+/// change.
+const FORMULA_SCALE: i128 = 100;
 
 /// The tables cover depths and move numbers below this.
 const TABLE_SIZE: usize = 64;
@@ -74,6 +189,10 @@ const FRACTION_BITS: u32 = 32;
 /// value below 2 fits in a `u128`.
 const MANTISSA_BITS: u32 = 62;
 
+/// One in the fixed point of a product of two logarithms, which carries twice their
+/// fractional bits.
+const PRODUCT_ONE: i128 = 1 << (2 * FRACTION_BITS);
+
 /// The natural logarithm of 2 in fixed point with [`FRACTION_BITS`] fractional bits.
 const LN_2: u128 = 2_977_044_472;
 
@@ -81,32 +200,28 @@ const LN_2: u128 = 2_977_044_472;
 /// 0 where either is 0. Larger depths and move numbers use the last entries.
 type Table = [[u8; TABLE_SIZE]; TABLE_SIZE];
 
-/// The [`QUIET`] reductions.
-static QUIET_TABLE: Table = build_table(&QUIET);
-
-/// The [`NOISY`] reductions.
-static NOISY_TABLE: Table = build_table(&NOISY);
-
 /// Builds a table of `formula` from fixed-point logarithms, so that no platform-dependent
 /// floating point is involved.
-const fn build_table(formula: &Formula) -> Table {
+const fn build_table(formula: Formula) -> Table {
+    assert!(formula.divisor > 0, "a reduction divisor must be positive");
+    let base = formula.base as i128;
+    let divisor = formula.divisor as i128;
     let mut table = [[0; TABLE_SIZE]; TABLE_SIZE];
     let mut depth = 1;
     while depth < TABLE_SIZE {
         let mut move_number = 1;
         while move_number < TABLE_SIZE {
-            // base + product / divisor, over the common denominator, with the product
-            // carrying twice the fractional bits of each logarithm.
-            let product = ln(depth as u32) * ln(move_number as u32);
-            let reduction = (((formula.base_numerator * formula.divisor_numerator)
-                << (2 * FRACTION_BITS))
-                + formula.base_denominator * formula.divisor_denominator * product)
-                / ((formula.base_denominator * formula.divisor_numerator) << (2 * FRACTION_BITS));
+            // base / scale + product / (divisor / scale), over the common denominator
+            // scale * divisor, rounded down.
+            let product = (ln(depth as u32) * ln(move_number as u32)) as i128;
+            let reduction = (base * divisor * PRODUCT_ONE
+                + FORMULA_SCALE * FORMULA_SCALE * product)
+                .div_euclid(FORMULA_SCALE * divisor * PRODUCT_ONE);
             assert!(
-                reduction <= u8::MAX as u128,
+                reduction <= u8::MAX as i128,
                 "reduction overflows the table"
             );
-            table[depth][move_number] = reduction as u8;
+            table[depth][move_number] = if reduction < 0 { 0 } else { reduction as u8 };
             move_number += 1;
         }
         depth += 1;
@@ -144,6 +259,11 @@ const fn log2(n: u32) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The plies `late_move` is reduced by with the default tables.
+    fn reduction(late_move: LateMove, depth: u32, move_number: u32) -> u32 {
+        Reductions::new().reduction(late_move, depth, move_number)
+    }
 
     /// A quiet move at zero history, which takes its table entry unchanged.
     const QUIET_BASE: LateMove = LateMove::Quiet { history: 0 };
