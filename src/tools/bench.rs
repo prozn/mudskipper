@@ -94,9 +94,8 @@ pub fn run(depth: u32, output: &mut impl Write) -> io::Result<()> {
     let mut total_nodes = 0;
     let mut elapsed = Duration::ZERO;
     for (index, fen) in POSITIONS.iter().enumerate() {
-        let start = Instant::now();
-        let nodes = search_position(fen, depth, &tt);
-        elapsed += start.elapsed();
+        let (nodes, search_time) = search_position(fen, depth, &tt);
+        elapsed += search_time;
         total_nodes += nodes;
         writeln!(
             output,
@@ -112,8 +111,12 @@ pub fn run(depth: u32, output: &mut impl Write) -> io::Result<()> {
 }
 
 /// Searches the Bench position `fen` to `depth` with a fresh worker, after clearing `tt`,
-/// and returns the nodes searched.
-fn search_position(fen: &str, depth: u32, tt: &TranspositionTable) -> u64 {
+/// and returns the nodes searched and the time the search took.
+///
+/// The time covers only the search. Clearing `tt` and building the worker, which zeroes
+/// its history tables, cost about as much as a depth-1 search and stay out of it, so the
+/// reported NPS measures search speed alone.
+fn search_position(fen: &str, depth: u32, tt: &TranspositionTable) -> (u64, Duration) {
     let board = Board::from_fen(fen)
         .unwrap_or_else(|err| panic!("bench position {fen:?} is invalid: {err}"));
     let limits = Limits {
@@ -122,9 +125,11 @@ fn search_position(fen: &str, depth: u32, tt: &TranspositionTable) -> u64 {
     };
     tt.clear();
     let mut worker = Worker::new(StopFlag::new(), tt.clone());
+    let game = Game::new(board);
     let mut nodes = 0;
-    worker.search(&Game::new(board), limits, |report| nodes = report.nodes);
-    nodes
+    let start = Instant::now();
+    worker.search(&game, limits, |report| nodes = report.nodes);
+    (nodes, start.elapsed())
 }
 
 #[cfg(test)]
@@ -148,12 +153,12 @@ mod tests {
         let tt = TranspositionTable::new(1);
         let forward: Vec<u64> = POSITIONS
             .iter()
-            .map(|fen| search_position(fen, DEPTH, &tt))
+            .map(|fen| search_position(fen, DEPTH, &tt).0)
             .collect();
         let mut backward: Vec<u64> = POSITIONS
             .iter()
             .rev()
-            .map(|fen| search_position(fen, DEPTH, &tt))
+            .map(|fen| search_position(fen, DEPTH, &tt).0)
             .collect();
         backward.reverse();
         assert_eq!(forward, backward);

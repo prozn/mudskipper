@@ -38,7 +38,7 @@ help with debugging:
 Run with `bench` as its argument, it runs **Bench** instead of the UCI loop: it searches
 a fixed set of 50 positions and prints the total node count, the **Bench signature**, as
 its final line, `<nodes> nodes <nps> nps`. `bench <depth>` searches to a depth other than
-the default of 5.
+the default of 8.
 
 ```sh
 ./target/release/mudskipper bench
