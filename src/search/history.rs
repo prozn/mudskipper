@@ -2,6 +2,7 @@
 //! search, and history, kept from one search to the next.
 
 use super::MAX_PLY;
+use super::params::{BONUS_OFFSET, BONUS_PER_PLY, MAX_BONUS};
 use crate::chess::{Board, Colour, Move, PieceType};
 
 /// The largest magnitude a history value reaches. The gravity formula in
@@ -10,28 +11,17 @@ use crate::chess::{Board, Colour, Move, PieceType};
 /// sooner. It must stay within `i16`, which stores the values.
 pub(super) const MAX_HISTORY: i32 = 16_384;
 
-/// Bonus per ply of depth for a quiet move that causes a beta cutoff, before the cap.
-/// Raising it makes deep cutoffs count for more than shallow ones and history adapt
-/// faster, until [`MAX_BONUS`] caps it.
-const BONUS_PER_PLY: i32 = 300;
-
-/// What [`BONUS_PER_PLY`] times the depth is reduced by, so that shallow cutoffs count
-/// for less.
-const BONUS_OFFSET: i32 = 250;
-
-/// The largest bonus a single cutoff earns, so that one deep cutoff does not swamp the
-/// table.
-const MAX_BONUS: i32 = 1_500;
-
 /// The bonus earned by a move causing a beta cutoff at `depth`, and the malus taken by
-/// each move tried before it, in both quiet and noisy history. Common values among
+/// each move tried before it, in both quiet and noisy history: [`BONUS_PER_PLY`] per ply
+/// less [`BONUS_OFFSET`], capped at [`MAX_BONUS`]. The defaults are common values among
 /// open-source engines at a similar stage.
 fn bonus(depth: u32) -> i32 {
     let depth = i32::try_from(depth).unwrap_or(i32::MAX);
     BONUS_PER_PLY
+        .get()
         .saturating_mul(depth)
-        .saturating_sub(BONUS_OFFSET)
-        .min(MAX_BONUS)
+        .saturating_sub(BONUS_OFFSET.get())
+        .min(MAX_BONUS.get())
 }
 
 /// Adds `delta`, a bonus if positive and a malus if negative, to the history value in

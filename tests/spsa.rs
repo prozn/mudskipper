@@ -125,20 +125,30 @@ fn spsa_prints_one_openbench_line_per_search_parameter_matching_uci() {
     );
 }
 
-/// Group A's step sizes, as #94 lists them, which `uci` does not show.
+/// Group A's and group B's step sizes, as #94 lists them, which `uci` does not show.
 #[cfg(feature = "tune")]
 #[test]
-fn spsa_prints_group_a_step_sizes() {
-    const GROUP_A_C_END: [(&str, f64); 6] = [
+fn spsa_prints_group_a_and_group_b_step_sizes() {
+    const GROUP_A_AND_B_C_END: [(&str, f64); 16] = [
         ("RFP_MARGIN", 8.0),
         ("FP_BASE_MARGIN", 12.0),
         ("FP_DEPTH_MARGIN", 7.0),
         ("SEE_PRUNING_DEPTH_MARGIN", 8.0),
         ("SEE_PRUNING_HISTORY_DIVISOR", 10.0),
         ("ASPIRATION_DELTA", 2.0),
+        ("BONUS_PER_PLY", 25.0),
+        ("BONUS_OFFSET", 30.0),
+        ("MAX_BONUS", 120.0),
+        ("HISTORY_DIVISOR", 600.0),
+        ("QUIET_LMR_BASE", 7.0),
+        ("QUIET_LMR_DIVISOR", 12.0),
+        ("NOISY_LMR_BASE", 8.0),
+        ("NOISY_LMR_DIVISOR", 18.0),
+        ("VICTIM_WEIGHT", 2.0),
+        ("PROMOTION_DIVISOR", 2.0),
     ];
     let lines = spsa_lines();
-    for (name, c_end) in GROUP_A_C_END {
+    for (name, c_end) in GROUP_A_AND_B_C_END {
         let line = lines
             .iter()
             .find(|line| line.name == name)

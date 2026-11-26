@@ -6,22 +6,11 @@
 //! same order as the good ones. A cutoff in an early stage skips generating the later ones.
 
 use super::history::History;
+use super::params::{PROMOTION_DIVISOR, VICTIM_WEIGHT};
 use crate::chess::{Board, Move, MoveList};
 
 /// Rough piece values for ordering captures, indexed by [`PieceType::index`].
 const ORDER_VALUES: [i32; 6] = [100, 300, 300, 500, 900, 0];
-
-/// What the victim's value is multiplied by in a noisy move's ordering score, setting how
-/// much noisy history it takes to put a capture above one of a more valuable victim.
-/// Raising it makes the victim count for more against history. With pawn = 100 and
-/// history bounded by 16384 it matches Obsidian's scale, where a full history is worth
-/// about 10 pawns of victim value (`docs/research/capture-history.md`).
-const VICTIM_WEIGHT: i32 = 16;
-
-/// What a promotion's weighted value is divided by in its ordering score. It keeps
-/// promotions in the proportion to captures they had under MVV-LVA, so that a queen
-/// promotion that captures nothing comes below a pawn capture at equal history.
-const PROMOTION_DIVISOR: i32 = 10;
 
 /// Which moves a picker hands out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,8 +245,9 @@ fn score(board: &Board, mv: Move, history: &History) -> i32 {
     let promotion = mv
         .promotion()
         .map_or(0, |promotion| ORDER_VALUES[promotion.index()]);
-    VICTIM_WEIGHT * victim
-        + VICTIM_WEIGHT * promotion / PROMOTION_DIVISOR
+    let victim_weight = VICTIM_WEIGHT.get();
+    victim_weight * victim
+        + victim_weight * promotion / PROMOTION_DIVISOR.get()
         + history.noisy().get(board, mv)
 }
 

@@ -9,7 +9,7 @@ use super::params::{
     ASPIRATION_DELTA, FP_BASE_MARGIN, FP_DEPTH_MARGIN, RFP_MARGIN, SEE_PRUNING_DEPTH_MARGIN,
     SEE_PRUNING_HISTORY_DIVISOR,
 };
-use super::reduction::{self, LateMove};
+use super::reduction::{LateMove, Reductions};
 use super::score::{self, DRAW, INFINITY, Score};
 use super::stop::StopFlag;
 use super::time::TimeLimit;
@@ -135,6 +135,8 @@ pub struct Worker {
     killers: Killers,
     /// History, learned from beta cutoffs and kept between searches.
     history: History,
+    /// The late move reduction tables, refreshed for each search.
+    reductions: Reductions,
     /// Keys of every position before the current one, from the game and the search.
     keys: KeyHistory,
     /// Keys of the positions before the current one since the search's root.
@@ -167,6 +169,7 @@ impl Worker {
             tt,
             killers: Killers::new(),
             history: History::new(),
+            reductions: Reductions::new(),
             keys: KeyHistory::new(),
             tree: KeyHistory::new(),
             stack: [Frame::ROOT; MAX_PLY + 1],
@@ -193,7 +196,8 @@ impl Worker {
     ///
     /// Each search starts a new generation of the transposition table, so that what
     /// earlier searches stored is kept but replaced first. Killer moves are cleared for
-    /// each search; history carries over.
+    /// each search; history carries over. In the **Tune build**, each search takes up the
+    /// reduction tables for the current **Search parameters**.
     pub fn search(
         &mut self,
         game: &Game,
@@ -209,6 +213,7 @@ impl Worker {
         self.stack[0] = Frame::ROOT;
         self.accumulators.refresh(board);
         self.killers = Killers::new();
+        self.reductions.refresh();
         self.nodes = 0;
         self.seldepth = 0;
         self.limits = limits;
@@ -467,7 +472,7 @@ impl Worker {
     ///
     /// The amount comes from a table that grows with the logarithms of the depth and move
     /// number, a milder one for noisy moves than for quiet ones, adjusted by the move's
-    /// history, as [`reduction::reduction`] describes. The reduction is a ply smaller on
+    /// history, as [`Reductions::reduction`] describes. The reduction is a ply smaller on
     /// the principal variation and always leaves at least one ply to search. The caller
     /// reduces only late moves that [`is_reducible`] allows, from a node not in check.
     fn late_move_reduction(
@@ -488,7 +493,8 @@ impl Worker {
             }
         };
         let pv_bonus = u32::from(node == Node::Pv);
-        reduction::reduction(late_move, depth, move_number)
+        self.reductions
+            .reduction(late_move, depth, move_number)
             .saturating_sub(pv_bonus)
             .min(depth - 2)
     }
