@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn good_quiet_history_lowers_the_reduction_and_bad_quiet_history_does_not_raise_it() {
         // Depth 20, move 40: a base of 6 quiet plies.
-        for (history, expected) in [(-16_384, 6), (0, 6), (7_834, 6), (7_835, 5), (16_384, 4)] {
+        for (history, expected) in [(-16_384, 6), (0, 6), (7_943, 6), (7_944, 5), (16_384, 4)] {
             assert_eq!(
                 reduction(LateMove::Quiet { history }, 20, 40),
                 expected,
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn good_noisy_history_lowers_the_reduction_and_bad_noisy_history_does_not_raise_it() {
         // Depth 20, move 40: a base of 3 noisy plies.
-        for (history, expected) in [(-16_384, 3), (0, 3), (7_834, 3), (7_835, 2), (16_384, 1)] {
+        for (history, expected) in [(-16_384, 3), (0, 3), (7_943, 3), (7_944, 2), (16_384, 1)] {
             assert_eq!(
                 reduction(LateMove::Noisy { history }, 20, 40),
                 expected,

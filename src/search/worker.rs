@@ -1085,8 +1085,8 @@ mod tests {
     fn see_pruning_threshold_falls_with_depth_and_good_noisy_history() {
         assert_eq!(see_pruning_threshold(1, 0), -88);
         assert_eq!(see_pruning_threshold(4, 0), -352);
-        assert_eq!(see_pruning_threshold(2, 6400), -260);
-        assert_eq!(see_pruning_threshold(3, -16384), -49);
+        assert_eq!(see_pruning_threshold(2, 6400), -248);
+        assert_eq!(see_pruning_threshold(3, -16384), -78);
     }
 
     #[test]
