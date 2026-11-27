@@ -236,6 +236,29 @@ through an SPRT as one change. SPSA finds values but proves nothing, so a tuned 
 never merged without its SPRT. A run starts straight from `main` or a PR branch; no
 tuning branch is needed.
 
+### Groups
+
+Each **Search parameter** has one home group, and a run normally tunes one group. Choose
+groups by three rules:
+
+- Tune together the parameters that interact, so that SPSA can trade one against another.
+- Keep apart the ones that could spoil a run (whole-number thresholds) or that don't touch
+  the search (time management).
+- Keep each run to about 20 parameters.
+
+| Group | Search parameters | Purpose and when to run |
+|---|---|---|
+| A: evaluation margins | `RFP_MARGIN`, `FP_BASE_MARGIN`, `FP_DEPTH_MARGIN`, `SEE_PRUNING_DEPTH_MARGIN`, `ASPIRATION_DELTA` | Margins measured in evaluation units. Tuned in #84, which also held `SEE_PRUNING_HISTORY_DIVISOR`, now in C. Re-run after each new **Network** (next: **Generation** 2, #86), and for #107's `RFP_MARGIN` re-tune. |
+| B: reductions and ordering | `QUIET_LMR_BASE`, `QUIET_LMR_DIVISOR`, `NOISY_LMR_BASE`, `NOISY_LMR_DIVISOR`, `VICTIM_WEIGHT`, `PROMOTION_DIVISOR` | The shape of the reduction tables and noisy move ordering. Tuned in #97, which also held the shared history bonus parameters that #98 split into group C, and `HISTORY_DIVISOR`, now in C. Re-run after a change to how late moves are reduced or noisy moves are ordered. |
+| C: history shape | `QUIET_BONUS_PER_PLY`, `QUIET_BONUS_OFFSET`, `QUIET_MAX_BONUS`, `QUIET_MALUS_PER_PLY`, `QUIET_MALUS_OFFSET`, `QUIET_MAX_MALUS`, `NOISY_BONUS_PER_PLY`, `NOISY_BONUS_OFFSET`, `NOISY_MAX_BONUS`, `NOISY_MALUS_PER_PLY`, `NOISY_MALUS_OFFSET`, `NOISY_MAX_MALUS`, `HISTORY_DIVISOR`, `SEE_PRUNING_HISTORY_DIVISOR`, and #92's four null-move reduction and LMP count terms once it lands | How history is built and how much it counts. The next search run. The two divisors belong here because both divide history, and once bonus and malus differ the typical history values move. |
+| D: integer thresholds | `RFP_MAX_DEPTH`, `FP_MAX_DEPTH`, `LMP_MAX_DEPTH`, `NMP_MIN_DEPTH`, `LMR_MIN_DEPTH`, `IIR_MIN_DEPTH`, `ASPIRATION_MIN_DEPTH`, `LMR_FULL_DEPTH_MOVES`, once #108 adds them | Depth limits and a move count, compared against whole numbers. Alone, at C_end 0.5 (the smallest C OpenBench uses for an integer, not 1/20 of the range), so that a parameter that swings spoils only its own run. After C. |
+| T: time management | the time management constants, once #99 adds them | Alone: it doesn't interact with the search groups and doesn't change the **Bench signature**. Can run whenever the test box is free. Check the result at LTC as well as STC. |
+| Joint polish (optional) | every parameter in A, B and C | Once each of those groups has been tuned, one run from the tuned values to catch interactions between groups. Larger than the 20-parameter rule allows, which is why it's optional. |
+
+A new **Search parameter** gets its home group in this table in the PR that adds it. A
+re-tune that mixes groups, such as one parameter folded into another group's run, names
+its parameters in its own issue.
+
 ### Workload input
 
 The **Tune build** prints the workload input from its parameter table, one line per
@@ -253,8 +276,10 @@ FP_BASE_MARGIN, int, 104, 20, 250, 12, 0.002
 ```
 
 Each line is `name, int, value, min, max, C_end, R_end`. Paste the lines for the group
-being tuned into the workload's parameters. C_end is about 1/20 of each parameter's
-range, so that each perturbation is worth a few Elo; R_end is 0.002 for every parameter.
+being tuned, exactly the parameters [Groups](#groups) lists for it, into the workload's
+parameters. A missed or extra line quietly changes what the run tunes. C_end is about
+1/20 of each parameter's range, so that each perturbation is worth a few Elo; R_end is
+0.002 for every parameter.
 
 ### Hyperparameters
 
