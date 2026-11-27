@@ -6,7 +6,8 @@ use super::MAX_PLY;
 use super::history::{History, Killers};
 use super::ordering::MovePicker;
 use super::params::{
-    ASPIRATION_DELTA, FP_BASE_MARGIN, FP_DEPTH_MARGIN, RFP_MARGIN, SEE_PRUNING_DEPTH_MARGIN,
+    ASPIRATION_DELTA, FP_BASE_MARGIN, FP_DEPTH_MARGIN, LMP_BASE_MOVES, LMP_DEPTH_MOVES,
+    NMP_BASE_REDUCTION, NMP_DEPTH_REDUCTION, RFP_MARGIN, SEE_PRUNING_DEPTH_MARGIN,
     SEE_PRUNING_HISTORY_DIVISOR,
 };
 use super::reduction::{LateMove, Reductions};
@@ -42,15 +43,6 @@ const ASPIRATION_MIN_DEPTH: u32 = 4;
 /// the reduced search is little more than quiescence.
 const NMP_MIN_DEPTH: u32 = 3;
 
-/// The plies a null move's search is reduced by at any depth, beyond the ply the null
-/// move itself takes, as common among open-source engines at a similar stage. A larger
-/// reduction makes the null-move search cheaper but more likely to miss a threat.
-const NMP_BASE_REDUCTION: u32 = 3;
-
-/// The null-move reduction grows by a ply for each this many plies of depth, so that deep
-/// nodes, where a missed threat is more likely to be found again later, are reduced more.
-const NMP_DEPTH_DIVISOR: u32 = 3;
-
 /// Shallowest depth at which late moves are reduced, the threshold common among
 /// open-source engines at a similar stage. Below it the reduced search would be little
 /// more than quiescence.
@@ -80,14 +72,17 @@ const FP_MAX_DEPTH: u32 = 6;
 /// stage.
 const LMP_MAX_DEPTH: u32 = 8;
 
-/// The number of moves late move pruning searches at any depth before skipping quiet
-/// moves; the count also grows by half the square of the depth. Raising it searches more
-/// quiet moves.
-const LMP_BASE_MOVES: u32 = 3;
-
 /// Deepest depth at which a noisy move is skipped when it loses too much material by
 /// static exchange evaluation (SEE pruning), the same as [`FP_MAX_DEPTH`].
 const SEE_PRUNING_MAX_DEPTH: u32 = FP_MAX_DEPTH;
+
+/// The fractions of a ply [`NMP_BASE_REDUCTION`] and [`NMP_DEPTH_REDUCTION`] are written
+/// in, fine enough that SPSA's smallest step changes the reduction at only a few depths.
+const NMP_SCALE: i32 = 256;
+
+/// The fractions of a move [`LMP_BASE_MOVES`] and [`LMP_DEPTH_MOVES`] are written in, fine
+/// enough that SPSA's smallest step changes the count at only a few depths.
+const LMP_SCALE: i32 = 100;
 
 /// When a search stops. A search with no limits runs to the deepest supported depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -549,7 +544,7 @@ impl Worker {
         {
             return None;
         }
-        let reduction = NMP_BASE_REDUCTION + depth / NMP_DEPTH_DIVISOR;
+        let reduction = null_move_reduction(depth);
         let child = board.pass();
         self.enter(board, ply, Reached::NullMove);
         let score = -self.negamax(
@@ -862,8 +857,26 @@ fn prunes_quiet(
     };
     let futile = depth <= FP_MAX_DEPTH
         && eval + FP_BASE_MARGIN.get() + FP_DEPTH_MARGIN.get() * depth as i32 <= window.alpha();
-    let late = depth <= LMP_MAX_DEPTH && legal_moves >= LMP_BASE_MOVES + depth * depth / 2;
+    let late = depth <= LMP_MAX_DEPTH && legal_moves >= late_move_pruning_count(depth);
     futile || late
+}
+
+/// The plies a null move's search is reduced by at `depth`, beyond the ply the null move
+/// itself takes: [`NMP_BASE_REDUCTION`] plus [`NMP_DEPTH_REDUCTION`] per ply, in
+/// [`NMP_SCALE`]ths of a ply, rounded down.
+fn null_move_reduction(depth: u32) -> u32 {
+    let reduction =
+        (NMP_BASE_REDUCTION.get() + NMP_DEPTH_REDUCTION.get() * depth as i32) / NMP_SCALE;
+    u32::try_from(reduction).unwrap_or(0)
+}
+
+/// The number of moves searched at `depth` before late move pruning skips quiet moves:
+/// [`LMP_BASE_MOVES`] plus [`LMP_DEPTH_MOVES`] per ply of depth, squared, in
+/// [`LMP_SCALE`]ths of a move, rounded down.
+fn late_move_pruning_count(depth: u32) -> u32 {
+    let depth = depth as i32;
+    let count = (LMP_BASE_MOVES.get() + LMP_DEPTH_MOVES.get() * depth * depth) / LMP_SCALE;
+    u32::try_from(count).unwrap_or(0)
 }
 
 /// Reports whether `mv`, a noisy move on `board`, may be skipped at a node of kind `node`,

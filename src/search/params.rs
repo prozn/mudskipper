@@ -226,4 +226,26 @@ search_params! {
     /// The largest malus a single cutoff gives a noisy move. Starts at the shared value
     /// tuned in #97.
     NOISY_MAX_MALUS: 1_503, 500..=3_000, c_end 120;
+
+    /// The plies a null move's search is reduced by at any depth, beyond the ply the null
+    /// move itself takes, ×256: 3 plies, as common among open-source engines at a similar
+    /// stage. A larger reduction makes the null-move search cheaper but more likely to
+    /// miss a threat.
+    NMP_BASE_REDUCTION: 768, 384..=1_536, c_end 58;
+
+    /// What the null-move reduction grows by per ply of depth, ×256: a third of a ply, so
+    /// that deep nodes, where a missed threat is more likely to be found again later, are
+    /// reduced more. With [`NMP_BASE_REDUCTION`] at 768 it gives `3 + depth / 3` exactly
+    /// up to depth 127.
+    NMP_DEPTH_REDUCTION: 86, 43..=172, c_end 6;
+
+    /// The number of moves late move pruning searches at any depth before skipping quiet
+    /// moves, ×100: 3 moves. Raising it searches more quiet moves.
+    LMP_BASE_MOVES: 300, 150..=600, c_end 22;
+
+    /// What the late move pruning count grows by per ply of depth, squared, ×100: half a
+    /// move, giving `3 + depth² / 2` with [`LMP_BASE_MOVES`] at 300. Raising it searches
+    /// more quiet moves at deeper nodes. The range reaches past the whole move Stormphrax
+    /// uses.
+    LMP_DEPTH_MOVES: 50, 25..=150, c_end 6;
 }
