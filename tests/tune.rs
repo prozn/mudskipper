@@ -18,11 +18,9 @@ const GROUP_A: [(&str, i32, i32, i32); 6] = [
 ];
 
 /// Group B, as #94 lists it, with the defaults tuned in #97: name, default, min and max.
-/// The reduction tables' bases and divisors are ×100.
-const GROUP_B: [(&str, i32, i32, i32); 10] = [
-    ("BONUS_PER_PLY", 303, 100, 600),
-    ("BONUS_OFFSET", 251, 0, 600),
-    ("MAX_BONUS", 1503, 500, 3000),
+/// The reduction tables' bases and divisors are ×100. The history bonus parameters left
+/// the group when #98 split them into [`HISTORY_BONUS_AND_MALUS`].
+const GROUP_B: [(&str, i32, i32, i32); 7] = [
     ("HISTORY_DIVISOR", 7835, 2048, 16384),
     ("QUIET_LMR_BASE", 79, 25, 150),
     ("QUIET_LMR_DIVISOR", 198, 150, 350),
@@ -32,9 +30,29 @@ const GROUP_B: [(&str, i32, i32, i32); 10] = [
     ("PROMOTION_DIVISOR", 11, 4, 30),
 ];
 
-/// Every **Search parameter**, group A then group B.
+/// The history bonus and malus, split by #98 for quiet and noisy history, each starting at
+/// the shared value tuned in #97: name, default, min and max.
+const HISTORY_BONUS_AND_MALUS: [(&str, i32, i32, i32); 12] = [
+    ("QUIET_BONUS_PER_PLY", 303, 100, 600),
+    ("QUIET_BONUS_OFFSET", 251, 0, 600),
+    ("QUIET_MAX_BONUS", 1503, 500, 3000),
+    ("QUIET_MALUS_PER_PLY", 303, 100, 600),
+    ("QUIET_MALUS_OFFSET", 251, 0, 600),
+    ("QUIET_MAX_MALUS", 1503, 500, 3000),
+    ("NOISY_BONUS_PER_PLY", 303, 100, 600),
+    ("NOISY_BONUS_OFFSET", 251, 0, 600),
+    ("NOISY_MAX_BONUS", 1503, 500, 3000),
+    ("NOISY_MALUS_PER_PLY", 303, 100, 600),
+    ("NOISY_MALUS_OFFSET", 251, 0, 600),
+    ("NOISY_MAX_MALUS", 1503, 500, 3000),
+];
+
+/// Every **Search parameter**: group A, group B, then the history bonus and malus.
 fn all_params() -> impl Iterator<Item = (&'static str, i32, i32, i32)> {
-    GROUP_A.into_iter().chain(GROUP_B)
+    GROUP_A
+        .into_iter()
+        .chain(GROUP_B)
+        .chain(HISTORY_BONUS_AND_MALUS)
 }
 
 #[test]

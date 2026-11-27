@@ -2,7 +2,11 @@
 //! search, and history, kept from one search to the next.
 
 use super::MAX_PLY;
-use super::params::{BONUS_OFFSET, BONUS_PER_PLY, MAX_BONUS};
+use super::params::{
+    NOISY_BONUS_OFFSET, NOISY_BONUS_PER_PLY, NOISY_MALUS_OFFSET, NOISY_MALUS_PER_PLY,
+    NOISY_MAX_BONUS, NOISY_MAX_MALUS, QUIET_BONUS_OFFSET, QUIET_BONUS_PER_PLY, QUIET_MALUS_OFFSET,
+    QUIET_MALUS_PER_PLY, QUIET_MAX_BONUS, QUIET_MAX_MALUS,
+};
 use crate::chess::{Board, Colour, Move, PieceType};
 
 /// The largest magnitude a history value reaches. The gravity formula in
@@ -11,17 +15,59 @@ use crate::chess::{Board, Colour, Move, PieceType};
 /// sooner. It must stay within `i16`, which stores the values.
 pub(super) const MAX_HISTORY: i32 = 16_384;
 
-/// The bonus earned by a move causing a beta cutoff at `depth`, and the malus taken by
-/// each move tried before it, in both quiet and noisy history: [`BONUS_PER_PLY`] per ply
-/// less [`BONUS_OFFSET`], capped at [`MAX_BONUS`]. The defaults are tuned by SPSA (#97)
-/// from values common among open-source engines at a similar stage.
-fn bonus(depth: u32) -> i32 {
+/// The size of a history update for a beta cutoff at `depth`: `per_ply` per ply less
+/// `offset`, capped at `max` and floored at zero. Each of the four updates, the bonus and
+/// the malus in quiet and in noisy history, has its own three **Search parameters**. The
+/// floor matters only if SPSA sets an offset beyond the shallowest updates: they then
+/// change nothing, rather than turning a bonus into a malus or a malus into a bonus.
+fn update_size(depth: u32, per_ply: i32, offset: i32, max: i32) -> i32 {
     let depth = i32::try_from(depth).unwrap_or(i32::MAX);
-    BONUS_PER_PLY
-        .get()
+    per_ply
         .saturating_mul(depth)
-        .saturating_sub(BONUS_OFFSET.get())
-        .min(MAX_BONUS.get())
+        .saturating_sub(offset)
+        .clamp(0, max)
+}
+
+/// The bonus a quiet move earns in quiet history by causing a beta cutoff at `depth`.
+fn quiet_bonus(depth: u32) -> i32 {
+    update_size(
+        depth,
+        QUIET_BONUS_PER_PLY.get(),
+        QUIET_BONUS_OFFSET.get(),
+        QUIET_MAX_BONUS.get(),
+    )
+}
+
+/// The malus each quiet move tried before a quiet cut-off move at `depth` takes in quiet
+/// history.
+fn quiet_malus(depth: u32) -> i32 {
+    update_size(
+        depth,
+        QUIET_MALUS_PER_PLY.get(),
+        QUIET_MALUS_OFFSET.get(),
+        QUIET_MAX_MALUS.get(),
+    )
+}
+
+/// The bonus a noisy move earns in noisy history by causing a beta cutoff at `depth`.
+fn noisy_bonus(depth: u32) -> i32 {
+    update_size(
+        depth,
+        NOISY_BONUS_PER_PLY.get(),
+        NOISY_BONUS_OFFSET.get(),
+        NOISY_MAX_BONUS.get(),
+    )
+}
+
+/// The malus each noisy move tried before a cut-off move at `depth` takes in noisy
+/// history.
+fn noisy_malus(depth: u32) -> i32 {
+    update_size(
+        depth,
+        NOISY_MALUS_PER_PLY.get(),
+        NOISY_MALUS_OFFSET.get(),
+        NOISY_MAX_MALUS.get(),
+    )
 }
 
 /// Adds `delta`, a bonus if positive and a malus if negative, to the history value in
@@ -63,9 +109,9 @@ impl History {
 
     /// Records that `mv` caused a beta cutoff in `board`, `depth` plies deep, after the
     /// quiet moves `quiets` and the noisy moves `noisies` were tried before it and failed
-    /// to. The cut-off move earns a [`bonus`] in its own table. A quiet cut-off move also
-    /// gives each move in `quiets` the matching malus in quiet history. Either way, each
-    /// move in `noisies` takes the malus in noisy history.
+    /// to. The cut-off move earns its table's bonus, [`quiet_bonus`] or [`noisy_bonus`]. A
+    /// quiet cut-off move also gives each move in `quiets` the [`quiet_malus`]. Either way,
+    /// each move in `noisies` takes the [`noisy_malus`].
     pub(super) fn update_on_cutoff(
         &mut self,
         board: &Board,
@@ -74,18 +120,19 @@ impl History {
         noisies: &[Move],
         depth: u32,
     ) {
-        let bonus = bonus(depth);
         if mv.is_noisy() {
-            self.noisy.update(board, mv, bonus);
+            self.noisy.update(board, mv, noisy_bonus(depth));
         } else {
             let colour = board.side_to_move();
-            self.quiet.update(colour, mv, bonus);
+            self.quiet.update(colour, mv, quiet_bonus(depth));
+            let malus = quiet_malus(depth);
             for &quiet in quiets {
-                self.quiet.update(colour, quiet, -bonus);
+                self.quiet.update(colour, quiet, -malus);
             }
         }
+        let malus = noisy_malus(depth);
         for &noisy in noisies {
-            self.noisy.update(board, noisy, -bonus);
+            self.noisy.update(board, noisy, -malus);
         }
     }
 }
@@ -230,7 +277,7 @@ mod tests {
             let mut history = QuietHistory::new();
             let mv = quiet_move();
             for (depth, is_bonus) in depths {
-                let delta = if is_bonus { bonus(depth) } else { -bonus(depth) };
+                let delta = if is_bonus { quiet_bonus(depth) } else { -quiet_malus(depth) };
                 history.update(Colour::White, mv, delta);
                 let value = history.get(Colour::White, mv);
                 prop_assert!(
@@ -239,6 +286,15 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_offset_beyond_the_shallow_update_gives_no_update_rather_than_the_opposite_one() {
+        // 100 per ply less 250 would be -150 at depth 1 and -50 at depth 2.
+        assert_eq!(update_size(1, 100, 250, 1_500), 0);
+        assert_eq!(update_size(2, 100, 250, 1_500), 0);
+        assert_eq!(update_size(3, 100, 250, 1_500), 50);
+        assert_eq!(update_size(20, 100, 250, 1_500), 1_500, "capped at the max");
     }
 
     #[test]
