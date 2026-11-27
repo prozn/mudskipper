@@ -125,12 +125,13 @@ fn spsa_prints_one_openbench_line_per_search_parameter_matching_uci() {
     );
 }
 
-/// The step sizes of group A, group B and the history bonus and malus split by #98, as
-/// #94 lists them, which `uci` does not show.
+/// The step sizes of group A, group B, the history bonus and malus split by #98, as #94
+/// lists them, and the null-move reduction and late move pruning terms #92 added, which
+/// `uci` does not show.
 #[cfg(feature = "tune")]
 #[test]
 fn spsa_prints_each_search_parameter_step_size() {
-    const C_END: [(&str, f64); 25] = [
+    const C_END: [(&str, f64); 29] = [
         ("RFP_MARGIN", 8.0),
         ("FP_BASE_MARGIN", 12.0),
         ("FP_DEPTH_MARGIN", 7.0),
@@ -156,6 +157,10 @@ fn spsa_prints_each_search_parameter_step_size() {
         ("NOISY_MALUS_PER_PLY", 25.0),
         ("NOISY_MALUS_OFFSET", 30.0),
         ("NOISY_MAX_MALUS", 120.0),
+        ("NMP_BASE_REDUCTION", 58.0),
+        ("NMP_DEPTH_REDUCTION", 6.0),
+        ("LMP_BASE_MOVES", 22.0),
+        ("LMP_DEPTH_MOVES", 6.0),
     ];
     let lines = spsa_lines();
     for (name, c_end) in C_END {

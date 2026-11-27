@@ -47,12 +47,24 @@ const HISTORY_BONUS_AND_MALUS: [(&str, i32, i32, i32); 12] = [
     ("NOISY_MAX_MALUS", 1503, 500, 3000),
 ];
 
-/// Every **Search parameter**: group A, group B, then the history bonus and malus.
+/// The null-move reduction and late move pruning count, rewritten by #92 in finer units
+/// (the reduction ×256, the count ×100) with defaults that keep their old values: name,
+/// default, min and max.
+const NMP_AND_LMP: [(&str, i32, i32, i32); 4] = [
+    ("NMP_BASE_REDUCTION", 768, 384, 1536),
+    ("NMP_DEPTH_REDUCTION", 86, 43, 172),
+    ("LMP_BASE_MOVES", 300, 150, 600),
+    ("LMP_DEPTH_MOVES", 50, 25, 150),
+];
+
+/// Every **Search parameter**: group A, group B, the history bonus and malus, then the
+/// null-move reduction and late move pruning count.
 fn all_params() -> impl Iterator<Item = (&'static str, i32, i32, i32)> {
     GROUP_A
         .into_iter()
         .chain(GROUP_B)
         .chain(HISTORY_BONUS_AND_MALUS)
+        .chain(NMP_AND_LMP)
 }
 
 #[test]
