@@ -122,10 +122,10 @@ search_params! {
     /// shape, uses 111. A larger margin prunes fewer moves.
     SEE_PRUNING_DEPTH_MARGIN: 88, 30..=180, c_end 8;
 
-    /// The divisor of noisy history in the SEE pruning threshold, tuned by SPSA (#84): a
-    /// noisy move with full history may lose about 2.2 pawns more. Stormphrax uses 65. A
-    /// larger divisor weighs history less.
-    SEE_PRUNING_HISTORY_DIVISOR: 76, 16..=256, c_end 10;
+    /// The divisor of noisy history in the SEE pruning threshold, tuned by SPSA with group
+    /// A (#84) and again with group C: a noisy move with full history may lose about 1.9
+    /// pawns more. Stormphrax uses 65. A larger divisor weighs history less.
+    SEE_PRUNING_HISTORY_DIVISOR: 88, 16..=256, c_end 10;
 
     /// Half the width of the first aspiration window, in centipawns, tuned by SPSA (#84)
     /// and within the range of 10 to 25 common among open-source engines. The window grows
@@ -135,8 +135,8 @@ search_params! {
 
     /// A late move is reduced a ply less for each this much history, if its history is
     /// positive: about 2 plies at the maximum history. Lowering it lets history protect
-    /// more moves from reduction. Tuned by SPSA (#97).
-    HISTORY_DIVISOR: 7_835, 2_048..=16_384, c_end 600;
+    /// more moves from reduction. Tuned by SPSA with group B (#97) and again with group C.
+    HISTORY_DIVISOR: 7_944, 2_048..=16_384, c_end 600;
 
     /// The base of the quiet late move reduction table, ×100: 0.79 plies, tuned by SPSA
     /// (#97) from the 0.75 common among open-source engines at a similar stage. Raising it
@@ -177,75 +177,72 @@ search_params! {
 
     /// Bonus per ply of depth in quiet history for a quiet move that causes a beta cutoff,
     /// before the cap. Raising it makes deep cutoffs count for more than shallow ones and
-    /// history adapt faster, until [`QUIET_MAX_BONUS`] caps it. Starts at the value SPSA
-    /// tuned for the bonus and malus of both tables together (#97).
-    QUIET_BONUS_PER_PLY: 303, 100..=600, c_end 25;
+    /// history adapt faster, until [`QUIET_MAX_BONUS`] caps it. Tuned by SPSA with group
+    /// C, from the value tuned for the bonus and malus of both tables together (#97).
+    QUIET_BONUS_PER_PLY: 298, 100..=600, c_end 25;
 
     /// What [`QUIET_BONUS_PER_PLY`] times the depth is reduced by, so that shallow cutoffs
-    /// count for less. Starts at the shared value tuned in #97.
-    QUIET_BONUS_OFFSET: 251, 0..=600, c_end 30;
+    /// count for less. Tuned by SPSA with group C.
+    QUIET_BONUS_OFFSET: 263, 0..=600, c_end 30;
 
     /// The largest bonus a single cutoff earns in quiet history, so that one deep cutoff
-    /// does not swamp the table. Starts at the shared value tuned in #97.
-    QUIET_MAX_BONUS: 1_503, 500..=3_000, c_end 120;
+    /// does not swamp the table. Tuned by SPSA with group C.
+    QUIET_MAX_BONUS: 1_536, 500..=3_000, c_end 120;
 
     /// Malus per ply of depth in quiet history for each quiet move tried before a quiet
     /// move that causes a beta cutoff, before the cap. Raising it makes history forget
-    /// moves that failed to cut off faster. Starts at the shared value tuned in #97.
-    QUIET_MALUS_PER_PLY: 303, 100..=600, c_end 25;
+    /// moves that failed to cut off faster. Tuned by SPSA with group C.
+    QUIET_MALUS_PER_PLY: 296, 100..=600, c_end 25;
 
-    /// What [`QUIET_MALUS_PER_PLY`] times the depth is reduced by. Starts at the shared
-    /// value tuned in #97.
-    QUIET_MALUS_OFFSET: 251, 0..=600, c_end 30;
+    /// What [`QUIET_MALUS_PER_PLY`] times the depth is reduced by. Tuned by SPSA with group
+    /// C.
+    QUIET_MALUS_OFFSET: 278, 0..=600, c_end 30;
 
-    /// The largest malus a single cutoff gives a quiet move. Starts at the shared value
-    /// tuned in #97.
-    QUIET_MAX_MALUS: 1_503, 500..=3_000, c_end 120;
+    /// The largest malus a single cutoff gives a quiet move. Tuned by SPSA with group C.
+    QUIET_MAX_MALUS: 1_395, 500..=3_000, c_end 120;
 
     /// Bonus per ply of depth in noisy history for a noisy move that causes a beta cutoff,
-    /// before the cap at [`NOISY_MAX_BONUS`]. Starts at the shared value tuned in #97.
-    NOISY_BONUS_PER_PLY: 303, 100..=600, c_end 25;
+    /// before the cap at [`NOISY_MAX_BONUS`]. Tuned by SPSA with group C.
+    NOISY_BONUS_PER_PLY: 275, 100..=600, c_end 25;
 
-    /// What [`NOISY_BONUS_PER_PLY`] times the depth is reduced by. Starts at the shared
-    /// value tuned in #97.
-    NOISY_BONUS_OFFSET: 251, 0..=600, c_end 30;
+    /// What [`NOISY_BONUS_PER_PLY`] times the depth is reduced by. Tuned by SPSA with group
+    /// C.
+    NOISY_BONUS_OFFSET: 241, 0..=600, c_end 30;
 
-    /// The largest bonus a single cutoff earns in noisy history. Starts at the shared value
-    /// tuned in #97.
-    NOISY_MAX_BONUS: 1_503, 500..=3_000, c_end 120;
+    /// The largest bonus a single cutoff earns in noisy history. Tuned by SPSA with group
+    /// C.
+    NOISY_MAX_BONUS: 1_405, 500..=3_000, c_end 120;
 
     /// Malus per ply of depth in noisy history for each noisy move tried before a move,
     /// quiet or noisy, that causes a beta cutoff, before the cap at [`NOISY_MAX_MALUS`].
-    /// Starts at the shared value tuned in #97.
-    NOISY_MALUS_PER_PLY: 303, 100..=600, c_end 25;
+    /// Tuned by SPSA with group C.
+    NOISY_MALUS_PER_PLY: 313, 100..=600, c_end 25;
 
-    /// What [`NOISY_MALUS_PER_PLY`] times the depth is reduced by. Starts at the shared
-    /// value tuned in #97.
-    NOISY_MALUS_OFFSET: 251, 0..=600, c_end 30;
+    /// What [`NOISY_MALUS_PER_PLY`] times the depth is reduced by. Tuned by SPSA with group
+    /// C.
+    NOISY_MALUS_OFFSET: 246, 0..=600, c_end 30;
 
-    /// The largest malus a single cutoff gives a noisy move. Starts at the shared value
-    /// tuned in #97.
-    NOISY_MAX_MALUS: 1_503, 500..=3_000, c_end 120;
+    /// The largest malus a single cutoff gives a noisy move. Tuned by SPSA with group C.
+    NOISY_MAX_MALUS: 1_484, 500..=3_000, c_end 120;
 
     /// The plies a null move's search is reduced by at any depth, beyond the ply the null
-    /// move itself takes, ×256: 3 plies, as common among open-source engines at a similar
-    /// stage. A larger reduction makes the null-move search cheaper but more likely to
-    /// miss a threat.
-    NMP_BASE_REDUCTION: 768, 384..=1_536, c_end 58;
+    /// move itself takes, ×256: about 2.95 plies, tuned by SPSA with group C from the 3
+    /// common among open-source engines at a similar stage. A larger reduction makes the
+    /// null-move search cheaper but more likely to miss a threat.
+    NMP_BASE_REDUCTION: 756, 384..=1_536, c_end 58;
 
-    /// What the null-move reduction grows by per ply of depth, ×256: a third of a ply, so
-    /// that deep nodes, where a missed threat is more likely to be found again later, are
-    /// reduced more. With [`NMP_BASE_REDUCTION`] at 768 it gives `3 + depth / 3` exactly
-    /// up to depth 127.
-    NMP_DEPTH_REDUCTION: 86, 43..=172, c_end 6;
+    /// What the null-move reduction grows by per ply of depth, ×256: about 0.36 of a ply,
+    /// tuned by SPSA with group C from a third, so that deep nodes, where a missed threat
+    /// is more likely to be found again later, are reduced more.
+    NMP_DEPTH_REDUCTION: 91, 43..=172, c_end 6;
 
     /// The number of moves late move pruning searches at any depth before skipping quiet
-    /// moves, ×100: 3 moves. Raising it searches more quiet moves.
-    LMP_BASE_MOVES: 300, 150..=600, c_end 22;
+    /// moves, ×100: 3.3 moves, tuned by SPSA with group C from 3. Raising it searches more
+    /// quiet moves.
+    LMP_BASE_MOVES: 330, 150..=600, c_end 22;
 
-    /// What the late move pruning count grows by per ply of depth, squared, ×100: half a
-    /// move, giving `3 + depth² / 2` with [`LMP_BASE_MOVES`] at 300. Raising it searches
-    /// more quiet moves at deeper nodes. The range reaches past the whole move Stormphrax
-    /// uses.
-    LMP_DEPTH_MOVES: 50, 25..=150, c_end 6;
+    /// What the late move pruning count grows by per ply of depth, squared, ×100: 0.61 of a
+    /// move, tuned by SPSA with group C from half. Raising it searches more quiet moves at
+    /// deeper nodes. The range reaches past the whole move Stormphrax uses.
+    LMP_DEPTH_MOVES: 61, 25..=150, c_end 6;
 }

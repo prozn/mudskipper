@@ -7,21 +7,23 @@ mod common;
 
 use common::Engine;
 
-/// Group A, as #94 lists it, with the defaults tuned in #84: name, default, min and max.
+/// Group A, as #94 lists it, with the defaults tuned in #84 (`SEE_PRUNING_HISTORY_DIVISOR`
+/// re-tuned with group C): name, default, min and max.
 const GROUP_A: [(&str, i32, i32, i32); 6] = [
     ("RFP_MARGIN", 49, 40, 160),
     ("FP_BASE_MARGIN", 104, 20, 250),
     ("FP_DEPTH_MARGIN", 59, 20, 160),
     ("SEE_PRUNING_DEPTH_MARGIN", 88, 30, 180),
-    ("SEE_PRUNING_HISTORY_DIVISOR", 76, 16, 256),
+    ("SEE_PRUNING_HISTORY_DIVISOR", 88, 16, 256),
     ("ASPIRATION_DELTA", 19, 5, 50),
 ];
 
-/// Group B, as #94 lists it, with the defaults tuned in #97: name, default, min and max.
+/// Group B, as #94 lists it, with the defaults tuned in #97 (`HISTORY_DIVISOR` re-tuned
+/// with group C): name, default, min and max.
 /// The reduction tables' bases and divisors are ×100. The history bonus parameters left
 /// the group when #98 split them into [`HISTORY_BONUS_AND_MALUS`].
 const GROUP_B: [(&str, i32, i32, i32); 7] = [
-    ("HISTORY_DIVISOR", 7835, 2048, 16384),
+    ("HISTORY_DIVISOR", 7944, 2048, 16384),
     ("QUIET_LMR_BASE", 79, 25, 150),
     ("QUIET_LMR_DIVISOR", 198, 150, 350),
     ("NOISY_LMR_BASE", 14, -50, 100),
@@ -30,31 +32,31 @@ const GROUP_B: [(&str, i32, i32, i32); 7] = [
     ("PROMOTION_DIVISOR", 11, 4, 30),
 ];
 
-/// The history bonus and malus, split by #98 for quiet and noisy history, each starting at
-/// the shared value tuned in #97: name, default, min and max.
+/// The history bonus and malus, split by #98 for quiet and noisy history, with the
+/// defaults tuned with group C: name, default, min and max.
 const HISTORY_BONUS_AND_MALUS: [(&str, i32, i32, i32); 12] = [
-    ("QUIET_BONUS_PER_PLY", 303, 100, 600),
-    ("QUIET_BONUS_OFFSET", 251, 0, 600),
-    ("QUIET_MAX_BONUS", 1503, 500, 3000),
-    ("QUIET_MALUS_PER_PLY", 303, 100, 600),
-    ("QUIET_MALUS_OFFSET", 251, 0, 600),
-    ("QUIET_MAX_MALUS", 1503, 500, 3000),
-    ("NOISY_BONUS_PER_PLY", 303, 100, 600),
-    ("NOISY_BONUS_OFFSET", 251, 0, 600),
-    ("NOISY_MAX_BONUS", 1503, 500, 3000),
-    ("NOISY_MALUS_PER_PLY", 303, 100, 600),
-    ("NOISY_MALUS_OFFSET", 251, 0, 600),
-    ("NOISY_MAX_MALUS", 1503, 500, 3000),
+    ("QUIET_BONUS_PER_PLY", 298, 100, 600),
+    ("QUIET_BONUS_OFFSET", 263, 0, 600),
+    ("QUIET_MAX_BONUS", 1536, 500, 3000),
+    ("QUIET_MALUS_PER_PLY", 296, 100, 600),
+    ("QUIET_MALUS_OFFSET", 278, 0, 600),
+    ("QUIET_MAX_MALUS", 1395, 500, 3000),
+    ("NOISY_BONUS_PER_PLY", 275, 100, 600),
+    ("NOISY_BONUS_OFFSET", 241, 0, 600),
+    ("NOISY_MAX_BONUS", 1405, 500, 3000),
+    ("NOISY_MALUS_PER_PLY", 313, 100, 600),
+    ("NOISY_MALUS_OFFSET", 246, 0, 600),
+    ("NOISY_MAX_MALUS", 1484, 500, 3000),
 ];
 
 /// The null-move reduction and late move pruning count, rewritten by #92 in finer units
-/// (the reduction ×256, the count ×100) with defaults that keep their old values: name,
+/// (the reduction ×256, the count ×100), with the defaults tuned with group C: name,
 /// default, min and max.
 const NMP_AND_LMP: [(&str, i32, i32, i32); 4] = [
-    ("NMP_BASE_REDUCTION", 768, 384, 1536),
-    ("NMP_DEPTH_REDUCTION", 86, 43, 172),
-    ("LMP_BASE_MOVES", 300, 150, 600),
-    ("LMP_DEPTH_MOVES", 50, 25, 150),
+    ("NMP_BASE_REDUCTION", 756, 384, 1536),
+    ("NMP_DEPTH_REDUCTION", 91, 43, 172),
+    ("LMP_BASE_MOVES", 330, 150, 600),
+    ("LMP_DEPTH_MOVES", 61, 25, 150),
 ];
 
 /// Every **Search parameter**: group A, group B, the history bonus and malus, then the

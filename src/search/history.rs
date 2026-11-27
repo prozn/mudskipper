@@ -314,7 +314,7 @@ mod tests {
         let quiets = board.quiet_moves();
         let mut history = History::new();
         history.update_on_cutoff(&board, quiets[2], &[], &[], 4);
-        assert_eq!(history.quiet().get(Colour::White, quiets[2]), 961);
+        assert_eq!(history.quiet().get(Colour::White, quiets[2]), 929);
         assert_eq!(history.quiet().get(Colour::Black, quiets[2]), 0);
     }
 
@@ -325,8 +325,8 @@ mod tests {
         let noisy = *board.noisy_moves().first().expect("exd5 is a capture");
         let mut history = History::new();
         history.update_on_cutoff(&board, quiets[2], &quiets[..2], &[noisy], 4);
-        assert_eq!(history.quiet().get(Colour::White, quiets[0]), -961);
-        assert_eq!(history.quiet().get(Colour::White, quiets[1]), -961);
+        assert_eq!(history.quiet().get(Colour::White, quiets[0]), -906);
+        assert_eq!(history.quiet().get(Colour::White, quiets[1]), -906);
         assert_eq!(
             history.quiet().get(Colour::White, quiets[3]),
             0,
@@ -354,7 +354,7 @@ mod tests {
         let noisy = *board.noisy_moves().first().expect("exd5 is a capture");
         let mut history = History::new();
         history.update_on_cutoff(&board, quiets[2], &quiets[..2], &[noisy], 4);
-        assert_eq!(history.noisy().get(&board, noisy), -961);
+        assert_eq!(history.noisy().get(&board, noisy), -1006);
     }
 
     #[test]
@@ -368,8 +368,8 @@ mod tests {
         assert_eq!(noisies.len(), 3, "{noisies:?}");
         let mut history = History::new();
         history.update_on_cutoff(&board, noisies[2], &[], &noisies[..1], 4);
-        assert_eq!(history.noisy().get(&board, noisies[2]), 961);
-        assert_eq!(history.noisy().get(&board, noisies[0]), -961);
+        assert_eq!(history.noisy().get(&board, noisies[2]), 859);
+        assert_eq!(history.noisy().get(&board, noisies[0]), -1006);
         assert_eq!(history.noisy().get(&board, noisies[1]), 0, "not tried");
     }
 
