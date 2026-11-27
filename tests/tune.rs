@@ -17,19 +17,19 @@ const GROUP_A: [(&str, i32, i32, i32); 6] = [
     ("ASPIRATION_DELTA", 19, 5, 50),
 ];
 
-/// Group B, as #94 lists it: name, default, min and max. The reduction tables' bases and
-/// divisors are ×100.
+/// Group B, as #94 lists it, with the defaults tuned in #97: name, default, min and max.
+/// The reduction tables' bases and divisors are ×100.
 const GROUP_B: [(&str, i32, i32, i32); 10] = [
-    ("BONUS_PER_PLY", 300, 100, 600),
-    ("BONUS_OFFSET", 250, 0, 600),
-    ("MAX_BONUS", 1500, 500, 3000),
-    ("HISTORY_DIVISOR", 8192, 2048, 16384),
-    ("QUIET_LMR_BASE", 75, 25, 150),
-    ("QUIET_LMR_DIVISOR", 225, 150, 350),
+    ("BONUS_PER_PLY", 303, 100, 600),
+    ("BONUS_OFFSET", 251, 0, 600),
+    ("MAX_BONUS", 1503, 500, 3000),
+    ("HISTORY_DIVISOR", 7835, 2048, 16384),
+    ("QUIET_LMR_BASE", 79, 25, 150),
+    ("QUIET_LMR_DIVISOR", 198, 150, 350),
     ("NOISY_LMR_BASE", 14, -50, 100),
-    ("NOISY_LMR_DIVISOR", 365, 200, 550),
+    ("NOISY_LMR_DIVISOR", 363, 200, 550),
     ("VICTIM_WEIGHT", 16, 4, 48),
-    ("PROMOTION_DIVISOR", 10, 4, 30),
+    ("PROMOTION_DIVISOR", 11, 4, 30),
 ];
 
 /// Every **Search parameter**, group A then group B.
@@ -124,10 +124,10 @@ fn setting_a_reduction_parameter_rebuilds_the_tables_until_it_is_restored() {
     const DEPTH: u32 = 8;
     // NOISY_LMR_BASE at its minimum checks that a negative base is accepted.
     const REDUCTION_PARAMS: [(&str, i32, i32); 4] = [
-        ("QUIET_LMR_BASE", 75, 150),
-        ("QUIET_LMR_DIVISOR", 225, 150),
+        ("QUIET_LMR_BASE", 79, 150),
+        ("QUIET_LMR_DIVISOR", 198, 150),
         ("NOISY_LMR_BASE", 14, -50),
-        ("NOISY_LMR_DIVISOR", 365, 200),
+        ("NOISY_LMR_DIVISOR", 363, 200),
     ];
     let fresh = nodes_at_depth(&mut Engine::start(), DEPTH);
     let mut engine = Engine::start();

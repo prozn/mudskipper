@@ -135,54 +135,56 @@ search_params! {
 
     /// Bonus per ply of depth for a move that causes a beta cutoff, in quiet and noisy
     /// history, before the cap. Raising it makes deep cutoffs count for more than shallow
-    /// ones and history adapt faster, until [`MAX_BONUS`] caps it.
-    BONUS_PER_PLY: 300, 100..=600, c_end 25;
+    /// ones and history adapt faster, until [`MAX_BONUS`] caps it. Tuned by SPSA (#97).
+    BONUS_PER_PLY: 303, 100..=600, c_end 25;
 
     /// What [`BONUS_PER_PLY`] times the depth is reduced by, so that shallow cutoffs count
-    /// for less.
-    BONUS_OFFSET: 250, 0..=600, c_end 30;
+    /// for less. Tuned by SPSA (#97).
+    BONUS_OFFSET: 251, 0..=600, c_end 30;
 
     /// The largest bonus a single cutoff earns, so that one deep cutoff does not swamp the
-    /// history table.
-    MAX_BONUS: 1_500, 500..=3_000, c_end 120;
+    /// history table. Tuned by SPSA (#97).
+    MAX_BONUS: 1_503, 500..=3_000, c_end 120;
 
     /// A late move is reduced a ply less for each this much history, if its history is
     /// positive: about 2 plies at the maximum history. Lowering it lets history protect
-    /// more moves from reduction.
-    HISTORY_DIVISOR: 8_192, 2_048..=16_384, c_end 600;
+    /// more moves from reduction. Tuned by SPSA (#97).
+    HISTORY_DIVISOR: 7_835, 2_048..=16_384, c_end 600;
 
-    /// The base of the quiet late move reduction table, ×100: 0.75 plies, as common among
-    /// open-source engines at a similar stage. Raising it reduces every quiet move more.
-    /// Setting it rebuilds the reduction tables.
-    QUIET_LMR_BASE: 75, 25..=150, c_end 7;
+    /// The base of the quiet late move reduction table, ×100: 0.79 plies, tuned by SPSA
+    /// (#97) from the 0.75 common among open-source engines at a similar stage. Raising it
+    /// reduces every quiet move more. Setting it rebuilds the reduction tables.
+    QUIET_LMR_BASE: 79, 25..=150, c_end 7;
 
     /// The divisor of `ln(depth) * ln(move number)` in the quiet late move reduction
-    /// table, ×100: 2.25. Lowering it makes the reduction grow faster with depth and move
-    /// number. Setting it rebuilds the reduction tables.
-    QUIET_LMR_DIVISOR: 225, 150..=350, c_end 12;
+    /// table, ×100: 1.98, tuned by SPSA (#97). Lowering it makes the reduction grow faster
+    /// with depth and move number. Setting it rebuilds the reduction tables.
+    QUIET_LMR_DIVISOR: 198, 150..=350, c_end 12;
 
     /// The base of the noisy late move reduction table, ×100: 0.14 plies. Noisy moves are
-    /// forcing, so they are reduced less than quiet moves. Weiss's capture table is the
-    /// model, relative to Mudskipper's own quiet table: [`QUIET_LMR_BASE`] scaled by the
-    /// ratio of Weiss's capture and quiet bases, 0.38 / 2.01, rounded to two decimal
-    /// places. It may go negative. Setting it rebuilds the reduction tables.
+    /// forcing, so they are reduced less than quiet moves. SPSA (#97) kept the value
+    /// modelled on Weiss's capture table: the old quiet base of 0.75 scaled by the ratio of
+    /// Weiss's capture and quiet bases, 0.38 / 2.01, rounded to two decimal places. It may
+    /// go negative. Setting it rebuilds the reduction tables.
     NOISY_LMR_BASE: 14, -50..=100, c_end 8;
 
     /// The divisor of `ln(depth) * ln(move number)` in the noisy late move reduction
-    /// table, ×100: 3.65, [`QUIET_LMR_DIVISOR`] scaled by the ratio of Weiss's capture and
-    /// quiet divisors, 3.76 / 2.32, rounded to two decimal places. Setting it rebuilds the
-    /// reduction tables.
-    NOISY_LMR_DIVISOR: 365, 200..=550, c_end 18;
+    /// table, ×100: 3.63, tuned by SPSA (#97) from 3.65, the old quiet divisor of 2.25
+    /// scaled by the ratio of Weiss's capture and quiet divisors, 3.76 / 2.32, rounded to
+    /// two decimal places. Setting it rebuilds the reduction tables.
+    NOISY_LMR_DIVISOR: 363, 200..=550, c_end 18;
 
     /// What the victim's value is multiplied by in a noisy move's ordering score, setting
     /// how much noisy history it takes to put a capture above one of a more valuable
     /// victim. Raising it makes the victim count for more against history. With pawn = 100
     /// and history bounded by 16384 it matches Obsidian's scale, where a full history is
-    /// worth about 10 pawns of victim value (`docs/research/capture-history.md`).
+    /// worth about 10 pawns of victim value (`docs/research/capture-history.md`). SPSA
+    /// (#97) kept it.
     VICTIM_WEIGHT: 16, 4..=48, c_end 2;
 
     /// What a promotion's weighted value is divided by in its ordering score. It keeps
     /// promotions in the proportion to captures they had under MVV-LVA, so that a queen
-    /// promotion that captures nothing comes below a pawn capture at equal history.
-    PROMOTION_DIVISOR: 10, 4..=30, c_end 2;
+    /// promotion that captures nothing comes below a pawn capture at equal history. Tuned
+    /// by SPSA (#97).
+    PROMOTION_DIVISOR: 11, 4..=30, c_end 2;
 }

@@ -272,15 +272,15 @@ mod tests {
 
     #[test]
     fn worked_examples_match_the_logarithmic_formulas() {
-        // floor(0.75 + ln(depth) * ln(move number) / 2.25) for quiet moves and
-        // floor(0.14 + ln(depth) * ln(move number) / 3.65) for noisy moves, worked by hand.
+        // floor(0.79 + ln(depth) * ln(move number) / 1.98) for quiet moves and
+        // floor(0.14 + ln(depth) * ln(move number) / 3.63) for noisy moves, worked by hand.
         for (late_move, depth, move_number, expected) in [
             (QUIET_BASE, 1, 30, 0),
-            (QUIET_BASE, 2, 2, 0),
+            (QUIET_BASE, 2, 2, 1),
             (QUIET_BASE, 3, 4, 1),
-            (QUIET_BASE, 10, 20, 3),
-            (QUIET_BASE, 20, 40, 5),
-            (QUIET_BASE, 63, 63, 8),
+            (QUIET_BASE, 10, 20, 4),
+            (QUIET_BASE, 20, 40, 6),
+            (QUIET_BASE, 63, 63, 9),
             (NOISY_BASE, 1, 30, 0),
             (NOISY_BASE, 3, 4, 0),
             (NOISY_BASE, 4, 10, 1),
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn every_entry_matches_floating_point_away_from_rounding_boundaries() {
-        for (late_move, base, divisor) in [(QUIET_BASE, 0.75, 2.25), (NOISY_BASE, 0.14, 3.65)] {
+        for (late_move, base, divisor) in [(QUIET_BASE, 0.79, 1.98), (NOISY_BASE, 0.14, 3.63)] {
             for depth in 1..64 {
                 for move_number in 1..64 {
                     let exact =
@@ -366,8 +366,8 @@ mod tests {
 
     #[test]
     fn good_quiet_history_lowers_the_reduction_and_bad_quiet_history_does_not_raise_it() {
-        // Depth 20, move 40: a base of 5 quiet plies.
-        for (history, expected) in [(-16_384, 5), (0, 5), (8_191, 5), (8_192, 4), (16_384, 3)] {
+        // Depth 20, move 40: a base of 6 quiet plies.
+        for (history, expected) in [(-16_384, 6), (0, 6), (7_834, 6), (7_835, 5), (16_384, 4)] {
             assert_eq!(
                 reduction(LateMove::Quiet { history }, 20, 40),
                 expected,
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn good_noisy_history_lowers_the_reduction_and_bad_noisy_history_does_not_raise_it() {
         // Depth 20, move 40: a base of 3 noisy plies.
-        for (history, expected) in [(-16_384, 3), (0, 3), (8_191, 3), (8_192, 2), (16_384, 1)] {
+        for (history, expected) in [(-16_384, 3), (0, 3), (7_834, 3), (7_835, 2), (16_384, 1)] {
             assert_eq!(
                 reduction(LateMove::Noisy { history }, 20, 40),
                 expected,
