@@ -133,19 +133,6 @@ search_params! {
     /// tree but misses more often, each miss costing a re-search.
     ASPIRATION_DELTA: 19, 5..=50, c_end 2;
 
-    /// Bonus per ply of depth for a move that causes a beta cutoff, in quiet and noisy
-    /// history, before the cap. Raising it makes deep cutoffs count for more than shallow
-    /// ones and history adapt faster, until [`MAX_BONUS`] caps it. Tuned by SPSA (#97).
-    BONUS_PER_PLY: 303, 100..=600, c_end 25;
-
-    /// What [`BONUS_PER_PLY`] times the depth is reduced by, so that shallow cutoffs count
-    /// for less. Tuned by SPSA (#97).
-    BONUS_OFFSET: 251, 0..=600, c_end 30;
-
-    /// The largest bonus a single cutoff earns, so that one deep cutoff does not swamp the
-    /// history table. Tuned by SPSA (#97).
-    MAX_BONUS: 1_503, 500..=3_000, c_end 120;
-
     /// A late move is reduced a ply less for each this much history, if its history is
     /// positive: about 2 plies at the maximum history. Lowering it lets history protect
     /// more moves from reduction. Tuned by SPSA (#97).
@@ -187,4 +174,56 @@ search_params! {
     /// promotion that captures nothing comes below a pawn capture at equal history. Tuned
     /// by SPSA (#97).
     PROMOTION_DIVISOR: 11, 4..=30, c_end 2;
+
+    /// Bonus per ply of depth in quiet history for a quiet move that causes a beta cutoff,
+    /// before the cap. Raising it makes deep cutoffs count for more than shallow ones and
+    /// history adapt faster, until [`QUIET_MAX_BONUS`] caps it. Starts at the value SPSA
+    /// tuned for the bonus and malus of both tables together (#97).
+    QUIET_BONUS_PER_PLY: 303, 100..=600, c_end 25;
+
+    /// What [`QUIET_BONUS_PER_PLY`] times the depth is reduced by, so that shallow cutoffs
+    /// count for less. Starts at the shared value tuned in #97.
+    QUIET_BONUS_OFFSET: 251, 0..=600, c_end 30;
+
+    /// The largest bonus a single cutoff earns in quiet history, so that one deep cutoff
+    /// does not swamp the table. Starts at the shared value tuned in #97.
+    QUIET_MAX_BONUS: 1_503, 500..=3_000, c_end 120;
+
+    /// Malus per ply of depth in quiet history for each quiet move tried before a quiet
+    /// move that causes a beta cutoff, before the cap. Raising it makes history forget
+    /// moves that failed to cut off faster. Starts at the shared value tuned in #97.
+    QUIET_MALUS_PER_PLY: 303, 100..=600, c_end 25;
+
+    /// What [`QUIET_MALUS_PER_PLY`] times the depth is reduced by. Starts at the shared
+    /// value tuned in #97.
+    QUIET_MALUS_OFFSET: 251, 0..=600, c_end 30;
+
+    /// The largest malus a single cutoff gives a quiet move. Starts at the shared value
+    /// tuned in #97.
+    QUIET_MAX_MALUS: 1_503, 500..=3_000, c_end 120;
+
+    /// Bonus per ply of depth in noisy history for a noisy move that causes a beta cutoff,
+    /// before the cap at [`NOISY_MAX_BONUS`]. Starts at the shared value tuned in #97.
+    NOISY_BONUS_PER_PLY: 303, 100..=600, c_end 25;
+
+    /// What [`NOISY_BONUS_PER_PLY`] times the depth is reduced by. Starts at the shared
+    /// value tuned in #97.
+    NOISY_BONUS_OFFSET: 251, 0..=600, c_end 30;
+
+    /// The largest bonus a single cutoff earns in noisy history. Starts at the shared value
+    /// tuned in #97.
+    NOISY_MAX_BONUS: 1_503, 500..=3_000, c_end 120;
+
+    /// Malus per ply of depth in noisy history for each noisy move tried before a move,
+    /// quiet or noisy, that causes a beta cutoff, before the cap at [`NOISY_MAX_MALUS`].
+    /// Starts at the shared value tuned in #97.
+    NOISY_MALUS_PER_PLY: 303, 100..=600, c_end 25;
+
+    /// What [`NOISY_MALUS_PER_PLY`] times the depth is reduced by. Starts at the shared
+    /// value tuned in #97.
+    NOISY_MALUS_OFFSET: 251, 0..=600, c_end 30;
+
+    /// The largest malus a single cutoff gives a noisy move. Starts at the shared value
+    /// tuned in #97.
+    NOISY_MAX_MALUS: 1_503, 500..=3_000, c_end 120;
 }
